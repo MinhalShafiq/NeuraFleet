@@ -4,8 +4,6 @@ services:
   redis:
     image: redis:7-alpine
     container_name: neurafleet-redis
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     networks:
