@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-service
+  namespace: neurafleet
+  labels:
+    app: rag-service
+    app.kubernetes.io/name: rag-service
+    app.kubernetes.io/part-of: neurafleet
+    app.kubernetes.io/component: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rag-service
+  template:
+    metadata:
+      labels:
+        app: rag-service
+        app.kubernetes.io/name: rag-service
+        app.kubernetes.io/part-of: neurafleet
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      # Toleration for GPU taint
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Equal"
+          value: "present"
+          effect: "NoSchedule"
+      # Prefer scheduling on GPU nodes
+      nodeSelector:
+        gpu: "true"
+      containers:
+        - name: rag-service
+          image: gcr.io/PROJECT_ID/neurafleet-rag-service:latest
+          ports:
+            - containerPort: 8003
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: neurafleet-config
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: neurafleet-secrets
+                  key: ANTHROPIC_API_KEY
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "2000m"
+              memory: "4Gi"
+              nvidia.com/gpu: "1"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: chroma-data
+              mountPath: /app/chroma_data
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: chroma-data
+          persistentVolumeClaim:
+            claimName: chroma-data-pvc
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chroma-data-pvc
+  namespace: neurafleet
+  labels:
+    app: rag-service
+    app.kubernetes.io/part-of: neurafleet
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard

@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: telemetry-service
+  namespace: neurafleet
+  labels:
+    app: telemetry-service
+    app.kubernetes.io/name: telemetry-service
+    app.kubernetes.io/part-of: neurafleet
+spec:
+  type: ClusterIP
+  selector:
+    app: telemetry-service
+  ports:
+    - name: http
+      port: 8002
+      targetPort: 8002
+      protocol: TCP

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neurafleet-config
+  namespace: neurafleet
+  labels:
+    app.kubernetes.io/part-of: neurafleet
+data:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "info"
+  REDIS_URL: "redis://redis:6379"
+  GATEWAY_URL: "http://gateway:8000"
+  LIDAR_SERVICE_URL: "http://lidar-service:8001"
+  TELEMETRY_SERVICE_URL: "http://telemetry-service:8002"
+  RAG_SERVICE_URL: "http://rag-service:8003"
+  CHROMA_PERSIST_DIR: "/app/chroma_data"

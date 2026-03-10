@@ -1,0 +1,36 @@
+NeuraFleet Troubleshooting Guide
+==================================
+
+High Temperature: Causes and Fixes
+------------------------------------
+Symptom: Temperature readings above 75 C, warning alerts, possible thermal shutdown at 95 C.
+Common causes: (1) Sustained heavy computational load (e.g., running simultaneous SLAM and object detection), (2) Blocked ventilation ports -- inspect for dust, mud, or debris, (3) Ambient temperature above 40 C, (4) Cooling fan failure, (5) Thermal paste degradation on the main processor.
+Fixes: Reduce computational load by disabling non-essential processes. Clean ventilation ports with compressed air. If operating in high-ambient-temperature environments, limit operation to 20-minute intervals with 10-minute cool-down periods. Check fan operation under Diagnostics > Thermal > Fan Test. If the fan does not spin, replace the fan assembly (part NF-FAN-40). For persistent issues, re-apply thermal compound on the processor heat sink.
+
+Sensor Drift and Calibration
+------------------------------
+Symptom: Gradually increasing position error, IMU heading drift, noisy LiDAR returns.
+IMU drift: The gyroscope accumulates bias error over time, especially after power cycling or rapid temperature changes. Run the IMU auto-calibration procedure on a level surface (Diagnostics > IMU Auto-Cal). If drift exceeds 1 degree per minute after calibration, the IMU module may need replacement.
+LiDAR noise: Increased noise in point clouds can result from condensation on the lens, scratches, or electrical interference. Clean the LiDAR lens with a microfibre cloth and isopropyl alcohol. Verify that power supply voltage is stable (12V +/- 0.5V). If noise persists, check for nearby RF interference sources.
+GPS drift: Large position jumps typically indicate multipath reflections from nearby buildings or structures. Relocate the robot to an area with clear sky view. For persistent issues, verify the RTCM correction data stream is active and the base station is within range.
+
+Communication Loss Recovery
+-----------------------------
+Symptom: Robot shows "communication_loss" alert, telemetry stops updating, robot enters Error state.
+Immediate actions: (1) Check the fleet console for network status indicators. (2) Verify the base station radio is powered and operating (green LED on radio module). (3) Check for physical obstructions or interference sources between the robot and base station.
+Recovery procedure: If the robot is within visual range, use the handheld controller to manually drive it closer to the base station. If the robot is beyond visual range, wait 120 seconds for the automatic reconnection protocol. The robot will attempt reconnection 5 times at 15-second intervals. If reconnection fails, the robot will execute its "lost communication" fallback: hold position for 5 minutes, then navigate to the last known base station position using dead reckoning.
+Prevention: Ensure radio antennas are properly oriented (vertically). Maintain line-of-sight where possible. Deploy Relay-type robots to extend communication range in cluttered environments.
+
+Battery Drain Troubleshooting
+-------------------------------
+Symptom: Battery drains significantly faster than expected (normal is approximately 0.6% per minute during active operation, 0.12% per minute when idle).
+Possible causes: (1) Running compute-intensive tasks (SLAM + ML inference can double power draw), (2) Motor strain from operating on rough terrain or carrying heavy payloads, (3) Battery cell degradation (check cell balance via BMS diagnostics), (4) Parasitic drain from a malfunctioning peripheral.
+Diagnosis: Monitor per-subsystem power draw under Diagnostics > Power > Breakdown. Compare against baseline values in the specification sheet. A single subsystem drawing more than 150% of its rated power indicates a fault.
+Fixes: Optimise task scheduling to avoid simultaneous high-power operations. Reduce speed on rough terrain. If cell imbalance exceeds 0.2 V, run a BMS balancing cycle. Replace battery pack if capacity is below 70% of rated value.
+
+Motor Stall Recovery
+---------------------
+Symptom: Robot stops moving, motor overcurrent alert (E005), possible grinding noise.
+Immediate actions: Issue an immediate stop command. Do not attempt to force-drive the motors.
+Diagnosis: Visually inspect wheels and tracks for obstructions (rocks, cables, debris). Check motor temperature -- if above 90 C, allow 15 minutes for cool-down before further action. Run Diagnostics > Motors > Stall Test to identify the affected motor.
+Recovery: Clear any physical obstruction. Reset the motor controller by power-cycling the drive module (Maintenance > Drive > Reset). Run a low-speed test drive in an open area. If stalling recurs, inspect the gearbox for stripped teeth and the drive belt for damage. Replace components as needed per the Maintenance Guide.

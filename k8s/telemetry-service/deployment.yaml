@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-service
+  namespace: neurafleet
+  labels:
+    app: telemetry-service
+    app.kubernetes.io/name: telemetry-service
+    app.kubernetes.io/part-of: neurafleet
+    app.kubernetes.io/component: ingestion
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: telemetry-service
+  template:
+    metadata:
+      labels:
+        app: telemetry-service
+        app.kubernetes.io/name: telemetry-service
+        app.kubernetes.io/part-of: neurafleet
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: telemetry-service
+          image: gcr.io/PROJECT_ID/neurafleet-telemetry-service:latest
+          ports:
+            - containerPort: 8002
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: neurafleet-config
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      restartPolicy: Always

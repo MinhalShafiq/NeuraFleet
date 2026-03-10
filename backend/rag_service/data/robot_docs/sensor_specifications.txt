@@ -1,0 +1,51 @@
+NeuraFleet Sensor Specifications
+==================================
+
+LiDAR Sensor: Velodyne VLP-16 (Puck)
+--------------------------------------
+- Type: 16-channel 3D spinning LiDAR
+- Range: 1 m to 100 m
+- Accuracy: +/- 3 cm (typical)
+- Horizontal field of view: 360 degrees
+- Vertical field of view: 30 degrees (-15 to +15 degrees)
+- Angular resolution (horizontal): 0.1 to 0.4 degrees (configurable)
+- Angular resolution (vertical): 2 degrees between channels
+- Scan rate: 5 Hz to 20 Hz (default 10 Hz)
+- Points per second: up to 300,000
+- Wavelength: 903 nm (near-infrared, Class 1 eye-safe)
+- Weight: 830 g
+- Operating temperature: -10 C to 60 C
+- Power consumption: 8 W typical
+- Data output: UDP packets over Ethernet (100 Mbps)
+
+IMU Sensor: Bosch BNO055 9-axis Absolute Orientation
+------------------------------------------------------
+- Accelerometer: 3-axis, range +/- 16 g, resolution 1 mg, noise 150 ug/sqrt(Hz)
+- Gyroscope: 3-axis, range +/- 2000 deg/s, resolution 1/16 deg/s
+- Magnetometer: 3-axis, range +/- 1300 uT (x/y), +/- 2500 uT (z)
+- Sample rate: up to 1000 Hz (accelerometer), 523 Hz (gyroscope)
+- Onboard sensor fusion: Kalman-filter-based AHRS
+- Interface: I2C / UART
+- Operating temperature: -40 C to 85 C
+- Power consumption: 12.3 mA at 3.3 V
+
+GPS Receiver: u-blox ZED-F9P (RTK-capable)
+--------------------------------------------
+- Horizontal accuracy: 2.0 m CEP (standalone), 0.01 m + 1 ppm (RTK fixed)
+- Vertical accuracy: 3.5 m CEP (standalone), 0.015 m + 1 ppm (RTK fixed)
+- Maximum update rate: 25 Hz
+- Supported constellations: GPS, GLONASS, Galileo, BeiDou
+- Cold start time-to-first-fix: 24 seconds (typical)
+- Sensitivity: -167 dBm (tracking)
+- Interface: UART / USB / SPI
+- Operating temperature: -40 C to 85 C
+
+Temperature Sensors
+-------------------
+- Type: NTC thermistor array (4 sensors per robot)
+- Locations: motor housing, battery pack, main PCB, external ambient
+- Range: -40 C to 125 C
+- Accuracy: +/- 0.5 C (at 25 C)
+- Resolution: 0.1 C
+- Sample rate: 10 Hz
+- Alert thresholds: Warning at 75 C, Critical at 85 C, Shutdown at 95 C

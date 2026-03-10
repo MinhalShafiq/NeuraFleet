@@ -1,0 +1,22 @@
+NeuraFleet Safety Protocols
+=============================
+
+Emergency Stop Procedures
+--------------------------
+The NeuraFleet system provides three methods for triggering an emergency stop. (1) Physical E-Stop button: a red mushroom-head button located on the rear panel of each robot. Pressing it immediately cuts power to all drive motors and engages the electromagnetic brakes. The robot will decelerate to a full stop within 0.5 seconds. To reset, twist the E-Stop button clockwise and re-enable via the fleet console. (2) Software E-Stop: accessible from the fleet management console under Controls > Emergency Stop. Selecting a robot (or "All Robots") and clicking the E-Stop button sends an immediate halt command over the network. Response time is typically under 100 milliseconds. (3) Voice command: operators wearing the approved headset can say "Emergency Stop [robot name]" to trigger a halt. Voice commands are processed locally with under 200 ms latency.
+
+Collision Avoidance System
+---------------------------
+Each robot employs a three-zone collision avoidance system based on fused LiDAR, ultrasonic, and camera data. The Awareness Zone extends 5 metres around the robot; detected objects are tracked and their trajectories predicted. The Warning Zone is 2 metres; the robot begins decelerating and adjusts its planned path to maintain clearance. The Critical Zone is 0.5 metres; the robot executes an immediate stop and generates a collision_proximity alert. The system operates at 20 Hz and can detect objects as small as 10 cm in diameter. Dynamic objects (humans, other robots, animals) are classified and given priority avoidance. The collision avoidance system cannot be disabled during Active mode and operates in a degraded capacity during Maintenance mode.
+
+Geofencing Rules
+-----------------
+All robots in the NeuraFleet fleet operate within a defined geofence -- a virtual boundary set by the fleet operator. The geofence is enforced by the onboard navigation system with a 1-metre buffer zone. When a robot approaches the geofence boundary, it receives a warning at the buffer edge and will actively steer away from the limit. If the robot crosses the hard boundary (for example due to being pushed by an external force), it immediately halts, generates an alert, and waits for operator clearance. Geofence definitions are stored on each robot and synchronised from the fleet console. Temporary geofence modifications (e.g., to expand the area for a specific task) require supervisor-level authorisation and are automatically reverted after a configurable timeout (default: 4 hours).
+
+Human-Robot Interaction Safety
+-------------------------------
+Robots operating in areas shared with humans must follow the NeuraFleet Human Safety Protocol (HSP). Maximum speed in human-shared zones is 1.0 m/s (vs. 2.5 m/s in robot-only zones). The robot must maintain a minimum 2-metre separation from any detected human. If a human enters the Critical Zone (0.5 m), the robot immediately halts and emits an audible warning tone (85 dB, 1 kHz intermittent). All robots are equipped with high-visibility LED strips (amber, 360-degree visibility) that flash when in motion. Robots must yield right-of-way to humans at all times. In mixed-traffic corridors, robots use the designated robot lane (marked with blue floor tape) and pause at intersections until the path is clear.
+
+Environmental Hazard Responses
+-------------------------------
+NeuraFleet robots are equipped with environmental sensors and respond to the following hazards. (1) Water/flooding: moisture sensors on the chassis underside trigger an alert if water depth exceeds 3 cm. The robot will attempt to navigate to higher ground. If water depth exceeds 10 cm, the robot halts and requests emergency retrieval. (2) Smoke/fire: onboard particulate and thermal sensors detect smoke and elevated ambient temperature. Upon detection, the robot immediately moves away from the heat source, generates a fire alert, and transmits its GPS coordinates to the fleet console for emergency response coordination. (3) Slopes: the IMU monitors chassis inclination. If the tilt angle exceeds 15 degrees, the robot reduces speed by 50%. Above 25 degrees, the robot halts and reverses to a safe position. (4) Wind: anemometer readings above 40 km/h trigger a speed reduction; above 50 km/h, the robot anchors in place and awaits operator recall. (5) Low visibility: camera-based visibility estimation triggers enhanced LED indicators and reduced speed when visibility drops below 10 metres.

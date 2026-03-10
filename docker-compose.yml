@@ -1,0 +1,126 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: neurafleet-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - neurafleet-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ./backend/gateway
+      dockerfile: Dockerfile
+    container_name: neurafleet-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - REDIS_URL=redis://redis:6379
+      - LIDAR_SERVICE_URL=http://lidar-service:8001
+      - TELEMETRY_SERVICE_URL=http://telemetry-service:8002
+      - RAG_SERVICE_URL=http://rag-service:8003
+    depends_on:
+      redis:
+        condition: service_healthy
+      lidar-service:
+        condition: service_started
+      telemetry-service:
+        condition: service_started
+      rag-service:
+        condition: service_started
+    networks:
+      - neurafleet-net
+    restart: unless-stopped
+
+  lidar-service:
+    build:
+      context: ./backend
+      dockerfile: lidar_service/Dockerfile
+    container_name: neurafleet-lidar
+    ports:
+      - "8001:8001"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - neurafleet-net
+    restart: unless-stopped
+
+  telemetry-service:
+    build:
+      context: ./backend
+      dockerfile: telemetry_service/Dockerfile
+    container_name: neurafleet-telemetry
+    ports:
+      - "8002:8002"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - neurafleet-net
+    restart: unless-stopped
+
+  rag-service:
+    build:
+      context: ./backend
+      dockerfile: rag_service/Dockerfile
+    container_name: neurafleet-rag
+    ports:
+      - "8003:8003"
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - REDIS_URL=redis://redis:6379
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CHROMA_PERSIST_DIR=/app/chroma_data
+    volumes:
+      - chroma_data:/app/chroma_data
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - neurafleet-net
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend/dashboard
+      dockerfile: Dockerfile
+    container_name: neurafleet-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - gateway
+    networks:
+      - neurafleet-net
+    restart: unless-stopped
+
+networks:
+  neurafleet-net:
+    driver: bridge
+
+volumes:
+  chroma_data:
+    driver: local
+  redis_data:
+    driver: local

@@ -1,0 +1,29 @@
+NeuraFleet Maintenance Guide
+==============================
+
+Battery Replacement and Care
+-----------------------------
+NeuraFleet robots use 48V 20Ah lithium iron phosphate (LiFePO4) battery packs. Expected lifespan is 2000 charge cycles (approximately 3 years under normal use). Battery health should be assessed every 30 days using the onboard Battery Management System (BMS) diagnostics -- access via the fleet console under Diagnostics > Battery Health. Replace the battery pack when capacity drops below 70% of rated value. Before replacement, power off the robot, engage the E-Stop, and wait 60 seconds for capacitor discharge. Use only NeuraFleet-approved battery packs (part number NF-BAT-48V20).
+
+Sensor Calibration Procedures
+------------------------------
+LiDAR calibration: The VLP-16 is factory-calibrated but may require field verification every 500 operating hours. Use the provided calibration target (1 m reflective panel) at 10 m distance. Run "Diagnostics > LiDAR Cal Check" from the console. If mean error exceeds 5 cm, contact the manufacturer for recalibration. IMU calibration: Place the robot on a level surface and run "Diagnostics > IMU Auto-Cal". The process takes approximately 45 seconds and calibrates accelerometer bias, gyroscope drift, and magnetometer hard/soft iron offsets. GPS calibration: No field calibration needed; however, verify RTCM correction stream connectivity monthly for RTK-enabled units.
+
+Motor Inspection Schedule
+--------------------------
+Inspect drive motors every 1000 operating hours or every 6 months, whichever comes first. Check for unusual noise, excessive vibration, or elevated temperature (above 80 C during operation). Inspect gear teeth for wear using the provided inspection mirror and borescope. Lubricate bearings with NeuraFleet-approved synthetic grease (part number NF-LUB-500) every 500 hours. Replace drive belts when stretch exceeds 2% of original length or if any fraying is visible.
+
+Firmware Update Process
+------------------------
+Firmware updates are distributed via the NeuraFleet Operations Centre (NFOC). Before updating: (1) Ensure battery is above 50%, (2) Place the robot in Maintenance mode, (3) Connect to the fleet network. Navigate to Console > System > Firmware Update and select the target version. The update process takes 5-15 minutes and the robot will reboot automatically. Do not power off during the update. After reboot, verify the firmware version under System > About and run a full self-test.
+
+Common Error Codes
+-------------------
+- E001: IMU communication timeout -- check I2C cable and restart IMU module
+- E002: LiDAR motor stall -- inspect for debris in the rotation mechanism; power cycle
+- E003: GPS fix lost for >60 seconds -- check antenna mount and sky visibility
+- E004: Battery cell imbalance >0.2 V -- run BMS balancing cycle; replace pack if recurring
+- E005: Motor overcurrent detected -- reduce payload; inspect motor and gearbox
+- E006: Temperature sensor fault -- verify thermistor wiring; replace sensor if open-circuit
+- E007: Communication link degraded -- check radio antenna and re-pair with base station
+- E008: Emergency stop triggered -- verify E-Stop button state; reset and re-enable

@@ -1,0 +1,14 @@
+NeuraFleet Robot Operations Manual
+====================================
+
+Startup Procedures
+------------------
+Before powering on any robot in the NeuraFleet fleet, operators must complete a pre-flight inspection checklist. Verify that all sensor mounts (LiDAR, IMU, GPS antenna) are securely fastened and free of debris. Inspect the battery connector for corrosion or loose pins. Confirm the emergency-stop lanyard is accessible and untangled. Once the physical check is complete, flip the main power switch and wait approximately 30 seconds for the onboard self-test to finish. A solid green LED on the status panel indicates all subsystems passed. If any LED shows amber or red, consult the error code table in the Troubleshooting Guide before proceeding. After a successful self-test, issue the "START" command from the fleet management console to bring the robot into Active mode.
+
+Operational Modes
+-----------------
+Each NeuraFleet robot supports five operational modes. "Active" is the standard autonomous navigation mode where the robot executes its assigned mission plan. "Idle" is a low-power standby mode used when no tasks are queued; the robot remains powered but stationary, reducing battery consumption by up to 80%. "Charging" engages automatically when battery falls below 15% -- the robot navigates to its designated charging station using a predefined docking approach. "Error" indicates a detected fault such as a sensor malfunction, motor stall, or communication loss; the robot halts all movement and awaits operator intervention. "Maintenance" is set manually by an operator when performing scheduled servicing; all autonomous behaviours are disabled and the drive system is locked out for safety.
+
+Shutdown Procedures and Safety Guidelines
+------------------------------------------
+To safely shut down a robot, issue the "STOP" command from the fleet console. The robot will decelerate, come to a complete halt, and discharge its motor capacitors. Wait for the amber "SAFE" LED before approaching. Turn off the main power switch and disconnect the battery if extended storage is planned. Never attempt to physically move a robot while it is in Active mode. All operators must wear high-visibility vests and steel-toed boots when working within the operational area. The minimum safe distance from an Active robot is 2 metres unless the operator holds a certified proximity clearance badge. Robots operating in outdoor environments must be recalled before wind speeds exceed 50 km/h or during electrical storms.

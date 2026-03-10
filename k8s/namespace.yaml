@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neurafleet
+  labels:
+    app.kubernetes.io/part-of: neurafleet
+    app.kubernetes.io/managed-by: kubectl
