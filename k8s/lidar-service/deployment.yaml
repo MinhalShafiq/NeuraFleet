@@ -9,7 +9,7 @@ metadata:
     app.kubernetes.io/part-of: neurafleet
     app.kubernetes.io/component: processing
 spec:
-  replicas: 2
+  replicas: 1  # simulation state is in-process; >1 replica = divergent worlds
   selector:
     matchLabels:
       app: lidar-service

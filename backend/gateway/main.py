@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Dict, List
 
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
@@ -271,6 +271,12 @@ app.add_middleware(
 # Health
 # ---------------------------------------------------------------------------
 
+@app.get("/health")
+async def liveness():
+    """Cheap liveness/readiness probe target (no downstream calls)."""
+    return {"status": "ok"}
+
+
 @app.get("/api/health")
 async def health():
     """Gateway health check.  Also probes downstream services."""
@@ -313,7 +319,7 @@ async def get_robot(robot_id: str):
     for rid, name, rtype in _ROBOT_NAMES:
         if rid == robot_id:
             return _mock_robot(rid, name, rtype)
-    return {"error": "robot not found"}
+    raise HTTPException(status_code=404, detail=f"robot {robot_id} not found")
 
 
 @app.get("/api/alerts")

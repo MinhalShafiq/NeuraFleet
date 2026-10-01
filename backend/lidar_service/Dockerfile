@@ -26,4 +26,5 @@ USER appuser
 
 EXPOSE 8001
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]
+# Single worker: simulation state lives in process memory (see OPTIMIZATION_PLAN 0.2).
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]

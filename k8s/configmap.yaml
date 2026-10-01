@@ -13,4 +13,4 @@ data:
   LIDAR_SERVICE_URL: "http://lidar-service:8001"
   TELEMETRY_SERVICE_URL: "http://telemetry-service:8002"
   RAG_SERVICE_URL: "http://rag-service:8003"
-  CHROMA_PERSIST_DIR: "/app/chroma_data"
+  CHROMA_DATA_DIR: "/app/chroma_data"

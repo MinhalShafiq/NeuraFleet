@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import Layout from './components/Layout'
 import FleetMonitor from './components/FleetMonitor'
 import PointCloudViewer from './components/PointCloudViewer'
@@ -7,11 +7,21 @@ import { createTelemetrySocket, fetchFleet, fetchAlerts } from './services/api'
 
 export default function App() {
   const [fleet, setFleet] = useState([])
-  const [selectedRobot, setSelectedRobot] = useState(null)
+  // Store only the id: a robot object captured at click time would never update.
+  const [selectedRobotId, setSelectedRobotId] = useState(null)
   const [activeView, setActiveView] = useState('dashboard')
   const [alerts, setAlerts] = useState([])
   const [connected, setConnected] = useState(false)
   const [telemetryHistory, setTelemetryHistory] = useState({})
+
+  const selectedRobot = useMemo(
+    () => fleet.find((r) => r.robot_id === selectedRobotId) ?? null,
+    [fleet, selectedRobotId],
+  )
+  const setSelectedRobot = useCallback(
+    (robot) => setSelectedRobotId(robot ? robot.robot_id : null),
+    [],
+  )
 
   const wsRef = useRef(null)
   const reconnectTimerRef = useRef(null)
@@ -35,7 +45,11 @@ export default function App() {
         try {
           const data = JSON.parse(event.data)
           if (Array.isArray(data)) {
-            setFleet(data)
+            // WS frames omit name/robot_type; keep them from the REST snapshot.
+            setFleet((prev) => {
+              const byId = new Map(prev.map((r) => [r.robot_id, r]))
+              return data.map((r) => ({ ...byId.get(r.robot_id), ...r }))
+            })
             setTelemetryHistory((prev) => {
               const next = { ...prev }
               const now = Date.now()

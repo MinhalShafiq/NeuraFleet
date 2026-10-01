@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 import random
 import time
-import uuid
+import zlib
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -92,6 +92,11 @@ class RobotSim:
 # Fleet Simulator
 # ---------------------------------------------------------------------------
 
+def _stable_phase(robot_id: str) -> int:
+    """Process-independent replacement for ``hash(str)`` (PYTHONHASHSEED-safe)."""
+    return zlib.crc32(robot_id.encode()) % 100
+
+
 class FleetSimulator:
     """
     Manages the full simulated fleet.
@@ -101,15 +106,20 @@ class FleetSimulator:
     serialisation to JSON / Pydantic models.
     """
 
-    def __init__(self, configs: List[RobotConfig] | None = None, area_size: float = 100.0):
+    def __init__(self, configs: List[RobotConfig] | None = None, area_size: float = 100.0,
+                 seed: int = 12345):
         self.configs = configs or FLEET_CONFIG
         self.area_size = area_size
         self.robots: Dict[str, RobotSim] = {}
-        self.alerts: List[dict] = []
+        # Stateful alerts keyed by (robot_id, alert_type); see _sync_alerts.
+        self._active_alerts: Dict[Tuple[str, str], dict] = {}
+        self._resolved_alerts: deque = deque(maxlen=50)
+        self._alert_seq: int = 0
         self._metrics_history: Dict[str, deque] = {}
         self._sim_time: float = 0.0
 
-        rng = random.Random(12345)
+        self._rng = random.Random(seed)
+        rng = self._rng
         for cfg in self.configs:
             r = RobotSim(
                 robot_id=cfg.robot_id,
@@ -141,7 +151,6 @@ class FleetSimulator:
     def update(self, dt: float = 0.1) -> None:
         """Advance the entire fleet simulation by *dt* seconds."""
         self._sim_time += dt
-        new_alerts: List[dict] = []
 
         for r in self.robots.values():
             self._update_status(r, dt)
@@ -162,11 +171,8 @@ class FleetSimulator:
                 "velocity_magnitude": round(vel_mag, 3),
             })
 
-            # Anomaly detection -> alerts
-            new_alerts.extend(self._detect_anomalies(r))
-
-        # Keep only recent alerts (last 50)
-        self.alerts = (self.alerts + new_alerts)[-50:]
+            # Anomaly detection -> alert state transitions
+            self._sync_alerts(r, self._detect_anomalies(r))
 
     # ------------------------------------------------------------------
     # Status FSM
@@ -178,45 +184,45 @@ class FleetSimulator:
         if r.status == "charging":
             if r.battery >= r._charging_target:
                 r.status = "active"
-                r._status_timer = random.uniform(20, 60)
+                r._status_timer = self._rng.uniform(20, 60)
             return
 
         if r.status == "error":
             if r._status_timer <= 0:
                 r.status = "maintenance"
-                r._status_timer = random.uniform(5, 15)
+                r._status_timer = self._rng.uniform(5, 15)
             return
 
         if r.status == "maintenance":
             if r._status_timer <= 0:
                 r.status = "active"
-                r._status_timer = random.uniform(30, 90)
+                r._status_timer = self._rng.uniform(30, 90)
                 r._sensor_fault = False
             return
 
         if r.status == "idle":
             if r._status_timer <= 0:
                 r.status = "active"
-                r._status_timer = random.uniform(20, 60)
+                r._status_timer = self._rng.uniform(20, 60)
             return
 
         # Status is "active"
         if r.battery < 15:
             r.status = "charging"
-            r._charging_target = random.uniform(85, 98)
+            r._charging_target = self._rng.uniform(85, 98)
             return
 
         if r._status_timer <= 0:
             # Random state transition
-            roll = random.random()
+            roll = self._rng.random()
             if roll < 0.02:
                 r.status = "error"
-                r._status_timer = random.uniform(5, 20)
+                r._status_timer = self._rng.uniform(5, 20)
             elif roll < 0.07:
                 r.status = "idle"
-                r._status_timer = random.uniform(5, 15)
+                r._status_timer = self._rng.uniform(5, 15)
             else:
-                r._status_timer = random.uniform(10, 40)
+                r._status_timer = self._rng.uniform(10, 40)
 
     # ------------------------------------------------------------------
     # Kinematics
@@ -240,14 +246,14 @@ class FleetSimulator:
             r.vy *= 0.95
         else:
             # Active: random walk with momentum
-            r.heading += random.gauss(0, 0.3 * dt)
+            r.heading += self._rng.gauss(0, 0.3 * dt)
             target_speed = {"explorer": 2.0, "hauler": 1.2, "scout": 2.5,
                             "sentinel": 0.8, "mapper": 1.5, "relay": 0.5
                             }.get(r.robot_type, 1.5)
             r.vx += (target_speed * math.cos(r.heading) - r.vx) * 0.1
             r.vy += (target_speed * math.sin(r.heading) - r.vy) * 0.1
             # Slight vertical bobbing
-            r.vz = 0.05 * math.sin(self._sim_time * 2 + hash(r.robot_id))
+            r.vz = 0.05 * math.sin(self._sim_time * 2 + _stable_phase(r.robot_id))
 
         r.x += r.vx * dt
         r.y += r.vy * dt
@@ -288,30 +294,30 @@ class FleetSimulator:
 
     def _update_systems(self, r: RobotSim, dt: float) -> None:
         if r.status == "active":
-            target_cpu = 40 + 20 * abs(math.sin(self._sim_time * 0.1 + hash(r.robot_id)))
-            target_mem = 45 + 15 * abs(math.cos(self._sim_time * 0.08 + hash(r.robot_id)))
-            target_temp = 50 + 10 * abs(math.sin(self._sim_time * 0.05 + hash(r.robot_id)))
+            target_cpu = 40 + 20 * abs(math.sin(self._sim_time * 0.1 + _stable_phase(r.robot_id)))
+            target_mem = 45 + 15 * abs(math.cos(self._sim_time * 0.08 + _stable_phase(r.robot_id)))
+            target_temp = 50 + 10 * abs(math.sin(self._sim_time * 0.05 + _stable_phase(r.robot_id)))
         elif r.status == "idle":
-            target_cpu = 10 + 5 * random.random()
-            target_mem = 30 + 5 * random.random()
-            target_temp = 35 + 3 * random.random()
+            target_cpu = 10 + 5 * self._rng.random()
+            target_mem = 30 + 5 * self._rng.random()
+            target_temp = 35 + 3 * self._rng.random()
         elif r.status == "charging":
             target_cpu = 8
             target_mem = 25
             target_temp = 38
         elif r.status == "error":
-            target_cpu = 80 + 15 * random.random()
-            target_mem = 70 + 20 * random.random()
-            target_temp = 65 + 10 * random.random()
+            target_cpu = 80 + 15 * self._rng.random()
+            target_mem = 70 + 20 * self._rng.random()
+            target_temp = 65 + 10 * self._rng.random()
         else:  # maintenance
             target_cpu = 20
             target_mem = 35
             target_temp = 40
 
         alpha = 0.05  # smoothing
-        r.cpu_usage += alpha * (target_cpu - r.cpu_usage) + random.gauss(0, 0.5)
-        r.memory_usage += alpha * (target_mem - r.memory_usage) + random.gauss(0, 0.3)
-        r.temperature += alpha * (target_temp - r.temperature) + random.gauss(0, 0.2)
+        r.cpu_usage += alpha * (target_cpu - r.cpu_usage) + self._rng.gauss(0, 0.5)
+        r.memory_usage += alpha * (target_mem - r.memory_usage) + self._rng.gauss(0, 0.3)
+        r.temperature += alpha * (target_temp - r.temperature) + self._rng.gauss(0, 0.2)
 
         r.cpu_usage = max(0, min(100, r.cpu_usage))
         r.memory_usage = max(0, min(100, r.memory_usage))
@@ -324,27 +330,27 @@ class FleetSimulator:
     def _update_sensors(self, r: RobotSim, dt: float) -> None:
         if r._sensor_fault:
             # Produce obviously bad readings
-            r.imu_ax = random.gauss(5, 3)
-            r.imu_ay = random.gauss(5, 3)
-            r.imu_az = random.gauss(-5, 5)
-            r.imu_gx = random.gauss(0, 2)
-            r.imu_gy = random.gauss(0, 2)
-            r.imu_gz = random.gauss(0, 2)
+            r.imu_ax = self._rng.gauss(5, 3)
+            r.imu_ay = self._rng.gauss(5, 3)
+            r.imu_az = self._rng.gauss(-5, 5)
+            r.imu_gx = self._rng.gauss(0, 2)
+            r.imu_gy = self._rng.gauss(0, 2)
+            r.imu_gz = self._rng.gauss(0, 2)
         else:
             # Accelerometer (gravity + motion noise)
-            r.imu_ax = r.vx * 0.1 + random.gauss(0, 0.08)
-            r.imu_ay = r.vy * 0.1 + random.gauss(0, 0.08)
-            r.imu_az = -9.81 + random.gauss(0, 0.04)
+            r.imu_ax = r.vx * 0.1 + self._rng.gauss(0, 0.08)
+            r.imu_ay = r.vy * 0.1 + self._rng.gauss(0, 0.08)
+            r.imu_az = -9.81 + self._rng.gauss(0, 0.04)
             # Gyroscope
-            r.imu_gx = random.gauss(0, 0.01)
-            r.imu_gy = random.gauss(0, 0.01)
+            r.imu_gx = self._rng.gauss(0, 0.01)
+            r.imu_gy = self._rng.gauss(0, 0.01)
             heading_rate = (r.vy * math.cos(r.heading) - r.vx * math.sin(r.heading))
-            r.imu_gz = heading_rate * 0.05 + random.gauss(0, 0.005)
+            r.imu_gz = heading_rate * 0.05 + self._rng.gauss(0, 0.005)
 
         # GPS (map sim coords to lat/lon)
-        r.gps_lat = 37.7749 + (r.x - 50) * 0.00001 + random.gauss(0, 0.000002)
-        r.gps_lon = -122.4194 + (r.y - 50) * 0.00001 + random.gauss(0, 0.000002)
-        r.gps_alt = 10.0 + r.z + random.gauss(0, 0.3)
+        r.gps_lat = 37.7749 + (r.x - 50) * 0.00001 + self._rng.gauss(0, 0.000002)
+        r.gps_lon = -122.4194 + (r.y - 50) * 0.00001 + self._rng.gauss(0, 0.000002)
+        r.gps_alt = 10.0 + r.z + self._rng.gauss(0, 0.3)
 
     # ------------------------------------------------------------------
     # Anomaly injection
@@ -355,89 +361,94 @@ class FleetSimulator:
         if r._anomaly_cooldown > 0:
             return
 
-        roll = random.random()
+        roll = self._rng.random()
         if roll < 0.0005:  # ~0.05% chance per tick
             # Temperature spike
-            r.temperature = random.uniform(78, 95)
-            r._anomaly_cooldown = random.uniform(20, 60)
+            r.temperature = self._rng.uniform(78, 95)
+            r._anomaly_cooldown = self._rng.uniform(20, 60)
         elif roll < 0.001:
             # Sensor fault
             r._sensor_fault = True
-            r._anomaly_cooldown = random.uniform(15, 40)
+            r._anomaly_cooldown = self._rng.uniform(15, 40)
         elif roll < 0.0015:
             # Sudden battery drop
-            r.battery = max(0, r.battery - random.uniform(5, 15))
-            r._anomaly_cooldown = random.uniform(30, 60)
+            r.battery = max(0, r.battery - self._rng.uniform(5, 15))
+            r._anomaly_cooldown = self._rng.uniform(30, 60)
 
     # ------------------------------------------------------------------
     # Anomaly detection -> alerts
     # ------------------------------------------------------------------
 
-    def _detect_anomalies(self, r: RobotSim) -> List[dict]:
-        alerts: List[dict] = []
-        ts = datetime.now(timezone.utc).isoformat()
+    # Hysteresis: a condition raises at the threshold but only clears once the
+    # value has moved clear of it, so readings hovering near a limit don't flap.
+    _TEMP_RAISE, _TEMP_CLEAR = 75.0, 72.0
+    _BATT_RAISE, _BATT_CLEAR = 20.0, 23.0
+    _PROX_RAISE, _PROX_CLEAR = 3.0, 3.5
 
-        if r.temperature > 75:
+    def _detect_anomalies(self, r: RobotSim) -> Dict[str, Tuple[str, str]]:
+        """Return ``{alert_type: (severity, message)}`` for conditions currently true."""
+        def active(atype: str) -> bool:
+            return (r.robot_id, atype) in self._active_alerts
+
+        found: Dict[str, Tuple[str, str]] = {}
+
+        if r.temperature > self._TEMP_RAISE or (active("high_temperature") and r.temperature > self._TEMP_CLEAR):
             sev = "critical" if r.temperature > 85 else "warning"
-            alerts.append({
-                "id": str(uuid.uuid4()),
-                "robot_id": r.robot_id,
-                "type": "high_temperature",
-                "severity": sev,
-                "message": f"Temperature at {r.temperature:.1f}°C on {r.name}",
-                "timestamp": ts,
-            })
+            found["high_temperature"] = (sev, f"Temperature at {r.temperature:.1f}°C on {r.name}")
 
-        if r.battery < 20:
+        if r.battery < self._BATT_RAISE or (active("low_battery") and r.battery < self._BATT_CLEAR):
             sev = "critical" if r.battery < 10 else "warning"
-            alerts.append({
-                "id": str(uuid.uuid4()),
-                "robot_id": r.robot_id,
-                "type": "low_battery",
-                "severity": sev,
-                "message": f"Battery at {r.battery:.1f}% on {r.name}",
-                "timestamp": ts,
-            })
+            found["low_battery"] = (sev, f"Battery at {r.battery:.1f}% on {r.name}")
 
         if r._sensor_fault:
-            alerts.append({
-                "id": str(uuid.uuid4()),
-                "robot_id": r.robot_id,
-                "type": "sensor_malfunction",
-                "severity": "warning",
-                "message": f"IMU sensor readings anomalous on {r.name}",
-                "timestamp": ts,
-            })
+            found["sensor_malfunction"] = ("warning", f"IMU sensor readings anomalous on {r.name}")
 
         if r.status == "error":
-            alerts.append({
-                "id": str(uuid.uuid4()),
-                "robot_id": r.robot_id,
-                "type": "communication_loss",
-                "severity": "critical",
-                "message": f"Communication degraded with {r.name}",
-                "timestamp": ts,
-            })
+            found["communication_loss"] = ("critical", f"Communication degraded with {r.name}")
 
-        # Collision proximity: check pairwise distances
+        # Collision proximity: nearest other robot
+        nearest, nearest_d = None, float("inf")
         for other in self.robots.values():
             if other.robot_id == r.robot_id:
                 continue
-            dist = math.sqrt((r.x - other.x) ** 2 + (r.y - other.y) ** 2)
-            if dist < 3.0:
-                alerts.append({
-                    "id": str(uuid.uuid4()),
-                    "robot_id": r.robot_id,
-                    "type": "collision_proximity",
-                    "severity": "warning" if dist > 1.5 else "critical",
-                    "message": (
-                        f"{r.name} within {dist:.1f} m of {other.name}"
-                    ),
-                    "timestamp": ts,
-                })
-                break  # one alert per robot per tick
+            d = math.sqrt((r.x - other.x) ** 2 + (r.y - other.y) ** 2)
+            if d < nearest_d:
+                nearest, nearest_d = other, d
+        if nearest is not None and (
+            nearest_d < self._PROX_RAISE or (active("collision_proximity") and nearest_d < self._PROX_CLEAR)
+        ):
+            sev = "warning" if nearest_d > 1.5 else "critical"
+            found["collision_proximity"] = (sev, f"{r.name} within {nearest_d:.1f} m of {nearest.name}")
 
-        return alerts
+        return found
+
+    def _sync_alerts(self, r: RobotSim, found: Dict[str, Tuple[str, str]]) -> None:
+        """Raise / update / clear this robot's alerts based on *found*."""
+        now = datetime.now(timezone.utc).isoformat()
+
+        for atype, (sev, msg) in found.items():
+            key = (r.robot_id, atype)
+            alert = self._active_alerts.get(key)
+            if alert is None:
+                self._alert_seq += 1
+                self._active_alerts[key] = {
+                    "id": f"{r.robot_id}:{atype}:{self._alert_seq}",
+                    "robot_id": r.robot_id,
+                    "type": atype,
+                    "severity": sev,
+                    "message": msg,
+                    "timestamp": now,  # == first_seen; kept for API compatibility
+                    "first_seen": now,
+                    "last_seen": now,
+                    "count": 1,
+                }
+            else:
+                alert.update(severity=sev, message=msg, last_seen=now, count=alert["count"] + 1)
+
+        for key in [k for k in self._active_alerts if k[0] == r.robot_id and k[1] not in found]:
+            alert = self._active_alerts.pop(key)
+            alert["resolved_at"] = now
+            self._resolved_alerts.append(alert)
 
     # ------------------------------------------------------------------
     # Public query methods
@@ -459,8 +470,12 @@ class FleetSimulator:
         return [self._robot_state(r) for r in self.robots.values()]
 
     def get_alerts(self) -> List[dict]:
-        """Return the current alert list (most recent 50)."""
-        return list(self.alerts)
+        """Return currently active alerts, oldest first."""
+        return [dict(a) for a in self._active_alerts.values()]
+
+    def get_resolved_alerts(self) -> List[dict]:
+        """Return the bounded history (last 50) of cleared alerts."""
+        return [dict(a) for a in self._resolved_alerts]
 
     def get_metrics(self, robot_id: str) -> Optional[dict]:
         """Return metrics history for a robot (up to 100 points)."""

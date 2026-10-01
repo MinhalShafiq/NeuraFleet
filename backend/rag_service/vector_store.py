@@ -34,19 +34,21 @@ class VectorStore:
     integration (model: all-MiniLM-L6-v2).
     """
 
-    def __init__(self, persist_dir: str = _CHROMA_DIR):
+    def __init__(self, persist_dir: str = _CHROMA_DIR, embedding_function=None):
+        persist_dir = os.path.abspath(persist_dir)
         logger.info("Initialising ChromaDB (persist=%s)", persist_dir)
-        self._client = chromadb.Client(
-            ChromaSettings(
-                chroma_db_impl="duckdb+parquet",
-                persist_directory=persist_dir,
-                anonymized_telemetry=False,
-            )
+        # PersistentClient is the only client that actually writes to disk;
+        # chromadb.Client() is ephemeral and ``chroma_db_impl`` was removed in 0.4.
+        self._client = chromadb.PersistentClient(
+            path=persist_dir,
+            settings=ChromaSettings(anonymized_telemetry=False),
         )
         # Get or create the collection
+        extra = {"embedding_function": embedding_function} if embedding_function else {}
         self._collection = self._client.get_or_create_collection(
             name="robot_docs",
             metadata={"hnsw:space": "cosine"},
+            **extra,
         )
         logger.info(
             "Collection 'robot_docs' ready (%d documents)",
@@ -72,14 +74,14 @@ class VectorStore:
 
         ids: List[str] = []
         texts: List[str] = []
-        metadatas: List[dict] = []
+        metadatas: List[Optional[dict]] = []
 
         base = self._collection.count()
         for i, doc in enumerate(documents):
             doc_id = f"doc_{base + i}"
             ids.append(doc_id)
             texts.append(doc["text"])
-            metadatas.append(doc.get("metadata", {}))
+            metadatas.append(doc.get("metadata") or None)  # Chroma rejects {}
 
         self._collection.add(
             ids=ids,

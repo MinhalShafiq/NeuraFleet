@@ -40,3 +40,6 @@ terraform/crash.log
 
 # Docker
 .docker/
+.pytest_cache/
+
+OPTIMIZATION_PLAN.md

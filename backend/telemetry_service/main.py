@@ -14,7 +14,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 
 from robot_simulator import FleetSimulator
 
@@ -89,7 +89,7 @@ async def health():
     return {
         "status": "ok",
         "robots": len(fleet_sim.robots),
-        "alerts": len(fleet_sim.alerts),
+        "alerts": len(fleet_sim.get_alerts()),
     }
 
 
@@ -109,10 +109,10 @@ async def get_fleet():
 async def get_robot(robot_id: str):
     """Return state for a single robot."""
     if fleet_sim is None:
-        return {"error": "simulator not ready"}
+        raise HTTPException(status_code=503, detail="simulator not ready")
     data = fleet_sim.get_robot(robot_id)
     if data is None:
-        return {"error": f"robot {robot_id} not found"}
+        raise HTTPException(status_code=404, detail=f"robot {robot_id} not found")
     return data
 
 
@@ -128,6 +128,14 @@ async def get_alerts():
     return fleet_sim.get_alerts()
 
 
+@app.get("/alerts/resolved")
+async def get_resolved_alerts():
+    """Return recently cleared alerts (bounded history)."""
+    if fleet_sim is None:
+        return []
+    return fleet_sim.get_resolved_alerts()
+
+
 # ---------------------------------------------------------------------------
 # REST: Metrics history
 # ---------------------------------------------------------------------------
@@ -136,10 +144,10 @@ async def get_alerts():
 async def get_metrics(robot_id: str):
     """Return up to 100 historical metric points for a robot."""
     if fleet_sim is None:
-        return {"error": "simulator not ready"}
+        raise HTTPException(status_code=503, detail="simulator not ready")
     data = fleet_sim.get_metrics(robot_id)
     if data is None:
-        return {"error": f"robot {robot_id} not found"}
+        raise HTTPException(status_code=404, detail=f"robot {robot_id} not found")
     return data
 
 
