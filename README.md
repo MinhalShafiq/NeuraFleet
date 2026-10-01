@@ -32,11 +32,11 @@ NeuraFleet is a cloud-native fleet management platform that simulates multi-robo
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                    React Dashboard                        │
-│  ┌──────────┐  ┌──────────────┐  ┌────────────────────┐ │
-│  │ 3D LiDAR │  │ Fleet Monitor│  │ LLM Chat Interface │ │
-│  │ Viewer   │  │ + Telemetry  │  │ (RAG-powered)      │ │
-│  └──────────┘  └──────────────┘  └────────────────────┘ │
+│                    React Dashboard                       │
+│  ┌──────────┐  ┌──────────────┐  ┌────────────────────┐  │
+│  │ 3D LiDAR │  │ Fleet Monitor│  │ LLM Chat Interface │  │
+│  │ Viewer   │  │ + Telemetry  │  │ (RAG-powered)      │  │
+│  └──────────┘  └──────────────┘  └────────────────────┘  │
 └──────────────────────┬───────────────────────────────────┘
                        │ HTTP / WebSocket
               ┌────────▼────────┐
