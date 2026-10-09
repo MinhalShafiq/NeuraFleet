@@ -27,8 +27,9 @@ RUN if [ -f pnpm-lock.yaml ]; then \
       npm run build; \
     fi
 
-# Stage 2: Serve with nginx
-FROM nginx:alpine
+# Stage 2: Serve with nginx (unprivileged: runs as uid 101 and listens on 8080,
+# so it needs no root and works with a read-only root filesystem)
+FROM nginxinc/nginx-unprivileged:alpine
 
 # Remove default nginx config
 RUN rm /etc/nginx/conf.d/default.conf
@@ -39,13 +40,6 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 # Copy built files from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Create non-root user for nginx
-RUN chown -R nginx:nginx /usr/share/nginx/html && \
-    chown -R nginx:nginx /var/cache/nginx && \
-    chown -R nginx:nginx /var/log/nginx && \
-    touch /var/run/nginx.pid && \
-    chown -R nginx:nginx /var/run/nginx.pid
-
-EXPOSE 80
+EXPOSE 8080
 
 CMD ["nginx", "-g", "daemon off;"]

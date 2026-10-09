@@ -8,7 +8,6 @@ metadata:
 data:
   ENVIRONMENT: "production"
   LOG_LEVEL: "info"
-  REDIS_URL: "redis://redis:6379"
   GATEWAY_URL: "http://gateway:8000"
   LIDAR_SERVICE_URL: "http://lidar-service:8001"
   TELEMETRY_SERVICE_URL: "http://telemetry-service:8002"

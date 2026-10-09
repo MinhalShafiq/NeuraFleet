@@ -24,7 +24,7 @@ NeuraFleet is a cloud-native fleet management platform that simulates multi-robo
 - Anthropic Claude integration with rule-based fallback for demo mode
 
 ### 4. Infrastructure as Code
-- **Terraform**: GCP infrastructure provisioning (GKE clusters, GCS storage, GPU nodes, VPC networking)
+- **Terraform**: GCP infrastructure provisioning (GKE clusters, GCS storage, VPC networking; an optional GPU pool, off by default)
 - **Kubernetes**: Deployment manifests with resource limits, health checks, and security contexts
 - **Docker**: Multi-stage builds, Docker Compose for local development
 
@@ -81,12 +81,37 @@ cd frontend/dashboard && npm install && npm run dev
 ```
 
 ### Terraform Deployment
+`authorized_cidrs` (who may reach the GKE control plane) is **required** and has no default;
+`0.0.0.0/0` is rejected. Put your ranges in an untracked per-environment file:
 ```bash
+cat > terraform/environments/dev.local.tfvars <<'EOF2'
+authorized_cidrs = [{ cidr_block = "203.0.113.7/32", display_name = "office" }]
+EOF2
+
 cd terraform
 terraform init
-terraform plan -var-file=environments/dev.tfvars
-terraform apply -var-file=environments/dev.tfvars
+terraform plan  -var-file=environments/dev.tfvars -var-file=environments/dev.local.tfvars
+terraform apply -var-file=environments/dev.tfvars -var-file=environments/dev.local.tfvars
 ```
+No GPU node pool is created (`gpu_node_count = 0`): nothing in the platform uses a GPU. Set it above 0 only if you add GPU workloads.
+
+### Kubernetes Deployment
+The Anthropic API key is **not** stored in the repo. Create the secret out-of-band (the RAG service
+runs in rule-based fallback mode if it is absent):
+```bash
+kubectl apply -f k8s/namespace.yaml
+kubectl -n neurafleet create secret generic neurafleet-secrets \
+  --from-literal=ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+```
+Then replace `PROJECT_ID` in the image names and apply everything else:
+```bash
+kubectl apply -f k8s/configmap.yaml -f k8s/backendconfig.yaml \
+  -f k8s/gateway -f k8s/telemetry-service -f k8s/lidar-service -f k8s/rag-service -f k8s/frontend \
+  -f k8s/ingress.yaml
+```
+`k8s/backendconfig.yaml` raises the load balancer's backend timeout to 1 h; without it GCE closes the
+WebSocket streams after 30 s. The telemetry and LiDAR services hold their simulation state in memory,
+so they run as a single replica.
 
 ## Simulated Fleet
 The platform simulates 6 robots:

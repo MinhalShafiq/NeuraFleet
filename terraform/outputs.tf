@@ -22,5 +22,5 @@ output "vpc_network_name" {
 
 output "gpu_node_pool_name" {
   description = "GPU node pool name"
-  value       = module.gpu.gpu_node_pool_name
+  value       = length(module.gpu) > 0 ? module.gpu[0].gpu_node_pool_name : null
 }

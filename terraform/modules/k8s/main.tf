@@ -16,11 +16,15 @@ resource "google_container_cluster" "primary" {
     master_ipv4_cidr_block  = "172.16.0.0/28"
   }
 
-  # Master authorized networks
+  # Master authorized networks: only the ranges passed in (never the whole internet; the root
+  # module rejects it).  In-VPC nodes reach the private endpoint without being listed.
   master_authorized_networks_config {
-    cidr_blocks {
-      cidr_block   = "0.0.0.0/0"
-      display_name = "All networks"
+    dynamic "cidr_blocks" {
+      for_each = var.authorized_cidrs
+      content {
+        cidr_block   = cidr_blocks.value.cidr_block
+        display_name = cidr_blocks.value.display_name
+      }
     }
   }
 
@@ -117,13 +121,4 @@ resource "google_container_node_pool" "default" {
     auto_repair  = true
     auto_upgrade = true
   }
-}
-
-# Configure kubernetes provider with cluster credentials
-data "google_client_config" "default" {}
-
-provider "kubernetes" {
-  host                   = "https://${google_container_cluster.primary.endpoint}"
-  token                  = data.google_client_config.default.access_token
-  cluster_ca_certificate = base64decode(google_container_cluster.primary.master_auth[0].cluster_ca_certificate)
 }

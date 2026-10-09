@@ -1,65 +1,62 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gateway
+  name: frontend
   namespace: neurafleet
   labels:
-    app: gateway
-    app.kubernetes.io/name: gateway
+    app: frontend
+    app.kubernetes.io/name: frontend
     app.kubernetes.io/part-of: neurafleet
-    app.kubernetes.io/component: api-gateway
+    app.kubernetes.io/component: dashboard
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: gateway
+      app: frontend
   template:
     metadata:
       labels:
-        app: gateway
-        app.kubernetes.io/name: gateway
+        app: frontend
+        app.kubernetes.io/name: frontend
         app.kubernetes.io/part-of: neurafleet
     spec:
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        runAsUser: 101   # nginx user in nginxinc/nginx-unprivileged
+        runAsGroup: 101
+        fsGroup: 101
       containers:
-        - name: gateway
-          image: gcr.io/PROJECT_ID/neurafleet-gateway:latest
+        - name: frontend
+          image: gcr.io/PROJECT_ID/neurafleet-frontend:latest
           ports:
-            - containerPort: 8000
+            - containerPort: 8080
               protocol: TCP
-          envFrom:
-            - configMapRef:
-                name: neurafleet-config
           resources:
             requests:
-              cpu: "250m"
-              memory: "256Mi"
+              cpu: "50m"
+              memory: "32Mi"
             limits:
-              cpu: "500m"
-              memory: "512Mi"
+              cpu: "250m"
+              memory: "128Mi"
           livenessProbe:
             httpGet:
-              path: /health
-              port: 8000
-            initialDelaySeconds: 15
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
             periodSeconds: 20
-            timeoutSeconds: 5
+            timeoutSeconds: 3
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
-              port: 8000
-            initialDelaySeconds: 10
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
             periodSeconds: 10
-            timeoutSeconds: 5
+            timeoutSeconds: 3
             failureThreshold: 3
           volumeMounts:
             - name: tmp
-              mountPath: /tmp
+              mountPath: /tmp   # nginx-unprivileged keeps its pid file and caches here
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

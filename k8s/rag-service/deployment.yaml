@@ -25,15 +25,8 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
-      # Toleration for GPU taint
-      tolerations:
-        - key: "nvidia.com/gpu"
-          operator: "Equal"
-          value: "present"
-          effect: "NoSchedule"
-      # Prefer scheduling on GPU nodes
-      nodeSelector:
-        gpu: "true"
+      # CPU-only: embeddings run on Chroma's ONNX MiniLM and generation is a remote API
+      # call, so there is nothing for a GPU to do here (and no GPU request/toleration).
       containers:
         - name: rag-service
           image: gcr.io/PROJECT_ID/neurafleet-rag-service:latest
@@ -49,15 +42,14 @@ spec:
                 secretKeyRef:
                   name: neurafleet-secrets
                   key: ANTHROPIC_API_KEY
+                  optional: true  # without it the service answers from its rule-based fallback
           resources:
             requests:
-              cpu: "500m"
-              memory: "1Gi"
-              nvidia.com/gpu: "1"
+              cpu: "250m"
+              memory: "256Mi"   # ~205 MiB observed idle
             limits:
-              cpu: "2000m"
-              memory: "4Gi"
-              nvidia.com/gpu: "1"
+              cpu: "1000m"
+              memory: "1Gi"
           livenessProbe:
             httpGet:
               path: /health
@@ -77,8 +69,11 @@ spec:
           volumeMounts:
             - name: chroma-data
               mountPath: /app/chroma_data
+            - name: tmp
+              mountPath: /tmp
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true   # the ONNX model is baked into the image; Chroma writes only to the PVC
             capabilities:
               drop:
                 - ALL
@@ -86,6 +81,8 @@ spec:
         - name: chroma-data
           persistentVolumeClaim:
             claimName: chroma-data-pvc
+        - name: tmp
+          emptyDir: {}
       restartPolicy: Always
 ---
 apiVersion: v1

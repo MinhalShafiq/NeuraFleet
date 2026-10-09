@@ -1,21 +1,22 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: gateway
+  name: frontend
   namespace: neurafleet
   labels:
-    app: gateway
-    app.kubernetes.io/name: gateway
+    app: frontend
+    app.kubernetes.io/name: frontend
     app.kubernetes.io/part-of: neurafleet
   annotations:
     cloud.google.com/neg: '{"ingress": true}'
+    # The dashboard's /api/ws/ traffic crosses this backend too, so it needs the same long timeout.
     cloud.google.com/backend-config: '{"default": "long-lived-connections"}'
 spec:
   type: ClusterIP
   selector:
-    app: gateway
+    app: frontend
   ports:
     - name: http
-      port: 8000
-      targetPort: 8000
+      port: 80
+      targetPort: 8080
       protocol: TCP

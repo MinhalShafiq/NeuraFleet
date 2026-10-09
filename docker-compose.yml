@@ -1,20 +1,4 @@
-version: "3.9"
-
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: neurafleet-redis
-    volumes:
-      - redis_data:/data
-    networks:
-      - neurafleet-net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
   gateway:
     build:
       context: ./backend/gateway
@@ -25,13 +9,10 @@ services:
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - REDIS_URL=redis://redis:6379
       - LIDAR_SERVICE_URL=http://lidar-service:8001
       - TELEMETRY_SERVICE_URL=http://telemetry-service:8002
       - RAG_SERVICE_URL=http://rag-service:8003
     depends_on:
-      redis:
-        condition: service_healthy
       lidar-service:
         condition: service_started
       telemetry-service:
@@ -52,10 +33,6 @@ services:
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      redis:
-        condition: service_healthy
     networks:
       - neurafleet-net
     restart: unless-stopped
@@ -70,10 +47,6 @@ services:
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - REDIS_URL=redis://redis:6379
-    depends_on:
-      redis:
-        condition: service_healthy
     networks:
       - neurafleet-net
     restart: unless-stopped
@@ -88,14 +61,10 @@ services:
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - REDIS_URL=redis://redis:6379
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - CHROMA_DATA_DIR=/app/chroma_data
     volumes:
       - chroma_data:/app/chroma_data
-    depends_on:
-      redis:
-        condition: service_healthy
     networks:
       - neurafleet-net
     restart: unless-stopped
@@ -106,7 +75,7 @@ services:
       dockerfile: Dockerfile
     container_name: neurafleet-frontend
     ports:
-      - "3000:80"
+      - "3000:8080"
     depends_on:
       - gateway
     networks:
@@ -119,6 +88,4 @@ networks:
 
 volumes:
   chroma_data:
-    driver: local
-  redis_data:
     driver: local

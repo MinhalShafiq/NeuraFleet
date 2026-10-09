@@ -29,7 +29,6 @@ class Settings:
     rag_service_url: str = os.getenv(
         "RAG_SERVICE_URL", "http://rag-service:8003"
     )
-    redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379")
 
     # Gateway settings
     host: str = os.getenv("GATEWAY_HOST", "0.0.0.0")

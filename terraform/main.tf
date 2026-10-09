@@ -18,6 +18,7 @@ module "k8s" {
   machine_type      = var.machine_type
   network_self_link = module.networking.network_self_link
   subnet_self_link  = module.networking.subnet_self_link
+  authorized_cidrs  = var.authorized_cidrs
 
   depends_on = [module.networking]
 }
@@ -30,8 +31,10 @@ module "storage" {
   environment = var.environment
 }
 
+# Only created when gpu_node_count > 0 (the default is 0: no workload uses a GPU).
 module "gpu" {
   source = "./modules/gpu"
+  count  = var.gpu_node_count > 0 ? 1 : 0
 
   project_id       = var.project_id
   zone             = var.zone

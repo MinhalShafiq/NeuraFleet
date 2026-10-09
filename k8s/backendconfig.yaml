@@ -1,0 +1,15 @@
+# GCE load balancers close any connection older than the backend timeout (default 30 s),
+# which kills the telemetry and LiDAR WebSocket streams.  Referenced by the gateway and
+# frontend Services via the cloud.google.com/backend-config annotation.  Health checks are
+# derived from each pod's readinessProbe (/health on the gateway, /healthz on the frontend).
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: long-lived-connections
+  namespace: neurafleet
+  labels:
+    app.kubernetes.io/part-of: neurafleet
+spec:
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 60

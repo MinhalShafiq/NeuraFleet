@@ -42,3 +42,11 @@ variable "subnet_self_link" {
   description = "Subnet self link"
   type        = string
 }
+
+variable "authorized_cidrs" {
+  description = "Source ranges allowed to reach the control plane"
+  type = list(object({
+    cidr_block   = string
+    display_name = string
+  }))
+}

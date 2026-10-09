@@ -1,0 +1,50 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: neurafleet-cert
+  namespace: neurafleet
+spec:
+  domains:
+    - neurafleet.io
+    - api.neurafleet.io
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: neurafleet-ingress
+  namespace: neurafleet
+  labels:
+    app.kubernetes.io/part-of: neurafleet
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "neurafleet-ip"
+    networking.gke.io/managed-certificates: "neurafleet-cert"
+spec:
+  defaultBackend:
+    service:
+      name: frontend
+      port:
+        number: 80
+  rules:
+    # Dashboard.  Its nginx proxies /api/ (including /api/ws/) to the gateway Service.
+    - host: neurafleet.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
+    # Direct API access.
+    - host: api.neurafleet.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 8000

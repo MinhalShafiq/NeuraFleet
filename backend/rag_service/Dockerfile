@@ -32,6 +32,10 @@ RUN mkdir -p /app/chroma_data && chown appuser:appuser /app/chroma_data
 # Switch to non-root user
 USER appuser
 
+# Bake Chroma's default embedding model (ONNX MiniLM, ~80 MB) into the image so startup
+# needs no network and the container can run with a read-only root filesystem.
+RUN python -c "from chromadb.utils.embedding_functions import DefaultEmbeddingFunction as E; E()(['warm-up'])"
+
 EXPOSE 8003
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8003", "--workers", "1"]

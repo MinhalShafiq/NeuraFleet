@@ -67,7 +67,7 @@ else skip "frontend build" "npm not installed"; fi
 # ---------------------------------------------------------------------------
 section "Docker stack"
 if [ "${NO_DOCKER:-0}" = 1 ]; then skip "all stack checks" "cannot talk to docker (install it / log out+in for the docker group)"; summary; fi
-if [ $UP -eq 1 ]; then echo "  building + starting (the first build is slow)..."; dc up --build -d >/dev/null; fi
+if [ $UP -eq 1 ]; then echo "  building + starting (the first build is slow)..."; dc up --build -d --remove-orphans >/dev/null; fi
 
 for i in $(seq 1 40); do curl -sf --max-time 3 localhost:8000/api/health 2>/dev/null | grep -q '"rag":"healthy"' && break; sleep 3; done
 HEALTH=$(curl -s --max-time 10 localhost:8000/api/health 2>/dev/null)
