@@ -16,7 +16,7 @@
     "@react-three/drei": "^9.92.7",
     "@react-three/fiber": "^8.15.12",
     "clsx": "^2.1.0",
-    "lucide-react": "^0.303.0",
+    "lucide-react": "^1.52.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "recharts": "^2.10.3",
