@@ -3,7 +3,7 @@ NeuraFleet RAG Vector Store
 ============================
 
 Manages a ChromaDB collection of robot fleet documentation.
-Uses sentence-transformers (all-MiniLM-L6-v2) for embeddings
+Uses ChromaDB's default ONNX embedder (all-MiniLM-L6-v2) for embeddings
 and cosine similarity for retrieval.
 """
 
@@ -30,7 +30,7 @@ class VectorStore:
     """
     Wraps ChromaDB with a single ``robot_docs`` collection.
 
-    Embeddings are computed by ChromaDB's built-in SentenceTransformer
+    Embeddings are computed by ChromaDB's built-in default (ONNX) embedding function
     integration (model: all-MiniLM-L6-v2).
     """
 

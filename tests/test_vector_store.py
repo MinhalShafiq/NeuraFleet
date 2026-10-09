@@ -59,3 +59,10 @@ def test_env_var_name_matches_deploy_config():
     var = re.search(r'getenv\("(CHROMA_\w+)"', code).group(1)
     for f in ("docker-compose.yml", "k8s/configmap.yaml"):
         assert var in (ROOT / f).read_text(), f"{f} does not set {var}"
+
+
+def test_rag_requirements_pin_numpy_below_2():
+    """chromadb 0.4.x imports np.float_, removed in NumPy 2 -> RAG container crash-loops."""
+    reqs = (ROOT / "backend/rag_service/requirements.txt").read_text()
+    m = re.search(r"^numpy==(\d+)\.", reqs, re.M)
+    assert m and int(m.group(1)) < 2
