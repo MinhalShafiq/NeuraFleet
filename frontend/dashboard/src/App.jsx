@@ -1,9 +1,24 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react'
 import Layout from './components/Layout'
 import FleetMonitor from './components/FleetMonitor'
-import PointCloudViewer from './components/PointCloudViewer'
-import ChatInterface from './components/ChatInterface'
+import ErrorBoundary from './components/ErrorBoundary'
 import { createTelemetrySocket, fetchFleet, fetchAlerts } from './services/api'
+
+// three.js + react-three-fiber + drei are the bulk of the bundle and only the LiDAR
+// view needs them; the dashboard (default view) shouldn't pay for them on first paint.
+const PointCloudViewer = lazy(() => import('./components/PointCloudViewer'))
+const ChatInterface = lazy(() => import('./components/ChatInterface'))
+
+const HISTORY_LEN = 50
+const HISTORY_COMMIT_MS = 1000 // charts re-render at ~1 Hz, not at the 2 Hz telemetry rate
+
+function ViewFallback() {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <div className="w-8 h-8 rounded-full border-2 border-primary-500/30 border-t-primary-500 animate-spin" />
+    </div>
+  )
+}
 
 export default function App() {
   const [fleet, setFleet] = useState([])
@@ -22,6 +37,10 @@ export default function App() {
     (robot) => setSelectedRobotId(robot ? robot.robot_id : null),
     [],
   )
+
+  // Raw history lives in a ref (mutated in place); React state is only a throttled snapshot.
+  const historyRef = useRef({})
+  const historyTimerRef = useRef(null)
 
   const wsRef = useRef(null)
   const reconnectTimerRef = useRef(null)
@@ -50,22 +69,27 @@ export default function App() {
               const byId = new Map(prev.map((r) => [r.robot_id, r]))
               return data.map((r) => ({ ...byId.get(r.robot_id), ...r }))
             })
-            setTelemetryHistory((prev) => {
-              const next = { ...prev }
-              const now = Date.now()
-              data.forEach((robot) => {
-                const history = next[robot.robot_id] || []
-                const entry = {
-                  time: now,
-                  battery: robot.battery,
-                  temperature: robot.temperature,
-                  cpu_usage: robot.cpu_usage,
-                  memory_usage: robot.memory_usage,
-                }
-                next[robot.robot_id] = [...history.slice(-49), entry]
+            const now = Date.now()
+            const hist = historyRef.current
+            for (const robot of data) {
+              const list = hist[robot.robot_id] || (hist[robot.robot_id] = [])
+              list.push({
+                time: now,
+                battery: robot.battery,
+                temperature: robot.temperature,
+                cpu_usage: robot.cpu_usage,
+                memory_usage: robot.memory_usage,
               })
-              return next
-            })
+              if (list.length > HISTORY_LEN) list.shift()
+            }
+            if (!historyTimerRef.current) {
+              historyTimerRef.current = setTimeout(() => {
+                historyTimerRef.current = null
+                const snapshot = {}
+                for (const [id, list] of Object.entries(historyRef.current)) snapshot[id] = list.slice()
+                setTelemetryHistory(snapshot)
+              }, HISTORY_COMMIT_MS)
+            }
           }
         } catch (err) {
           console.error('Failed to parse telemetry:', err)
@@ -104,6 +128,10 @@ export default function App() {
       }
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
+      }
+      if (historyTimerRef.current) {
+        clearTimeout(historyTimerRef.current)
+        historyTimerRef.current = null
       }
     }
   }, [connectWebSocket])
@@ -167,7 +195,9 @@ export default function App() {
       onSelectRobot={setSelectedRobot}
       connected={connected}
     >
-      {renderView()}
+      <ErrorBoundary resetKey={activeView}>
+        <Suspense fallback={<ViewFallback />}>{renderView()}</Suspense>
+      </ErrorBoundary>
     </Layout>
   )
 }

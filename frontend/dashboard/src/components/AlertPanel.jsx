@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { memo, useMemo } from 'react'
 import {
   AlertTriangle,
   AlertCircle,
@@ -51,10 +51,9 @@ function timeAgo(timestamp) {
   return `${days}d ago`
 }
 
-function AlertItem({ alert, fleet }) {
+const AlertItem = memo(function AlertItem({ alert, robotName }) {
   const config = SEVERITY_CONFIG[alert.severity] || SEVERITY_CONFIG.info
   const Icon = config.icon
-  const robot = fleet?.find((r) => r.robot_id === alert.robot_id)
 
   return (
     <div
@@ -70,7 +69,7 @@ function AlertItem({ alert, fleet }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2 mb-0.5">
           <span className="text-xs font-medium text-slate-200 truncate">
-            {robot?.name || alert.robot_id}
+            {robotName || alert.robot_id}
           </span>
           <span className="text-[10px] text-slate-500 shrink-0 font-mono">
             {timeAgo(alert.timestamp)}
@@ -97,10 +96,12 @@ function AlertItem({ alert, fleet }) {
       </div>
     </div>
   )
-}
+})
 
-export default function AlertPanel({ alerts, fleet }) {
-  const sortedAlerts = [...(alerts || [])].sort((a, b) => {
+// Takes a stable id->name map instead of the fleet array: the fleet changes at 2 Hz,
+// alerts only every few seconds, so this panel should not re-render with telemetry.
+function AlertPanel({ alerts, robotNames }) {
+  const sortedAlerts = useMemo(() => [...(alerts || [])].sort((a, b) => {
     const tsA = typeof a.timestamp === 'number'
       ? (a.timestamp > 1e12 ? a.timestamp : a.timestamp * 1000)
       : new Date(a.timestamp).getTime()
@@ -108,7 +109,7 @@ export default function AlertPanel({ alerts, fleet }) {
       ? (b.timestamp > 1e12 ? b.timestamp : b.timestamp * 1000)
       : new Date(b.timestamp).getTime()
     return tsB - tsA
-  })
+  }), [alerts])
 
   return (
     <div className="glass-panel p-4">
@@ -135,10 +136,12 @@ export default function AlertPanel({ alerts, fleet }) {
           </div>
         ) : (
           sortedAlerts.map((alert) => (
-            <AlertItem key={alert.id} alert={alert} fleet={fleet} />
+            <AlertItem key={alert.id} alert={alert} robotName={robotNames?.[alert.robot_id]} />
           ))
         )}
       </div>
     </div>
   )
 }
+
+export default memo(AlertPanel)

@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { memo, useMemo, useRef } from 'react'
 import {
   Bot,
   Battery,
@@ -32,7 +32,7 @@ const STATUS_STYLES = {
   maintenance: 'bg-gray-400/10 text-gray-400 border-gray-400/20',
 }
 
-function StatCard({ icon: Icon, label, value, sub, color }) {
+const StatCard = memo(function StatCard({ icon: Icon, label, value, sub, color }) {
   return (
     <div className="stat-card">
       <div className="flex items-start justify-between">
@@ -56,7 +56,7 @@ function StatCard({ icon: Icon, label, value, sub, color }) {
       </div>
     </div>
   )
-}
+})
 
 function BatteryBar({ value }) {
   const color =
@@ -87,7 +87,7 @@ function MiniBar({ value, max = 100, color = 'bg-primary-500' }) {
   )
 }
 
-function RobotCard({ robot, isSelected, onSelect }) {
+const RobotCard = memo(function RobotCard({ robot, isSelected, onSelect }) {
   return (
     <div
       onClick={() => onSelect(robot)}
@@ -223,16 +223,36 @@ function RobotCard({ robot, isSelected, onSelect }) {
       </div>
     </div>
   )
+})
+
+function ChartTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 shadow-xl">
+      {payload.map((p) => (
+        <p key={p.name} className="text-xs" style={{ color: p.color }}>
+          {p.name}: {p.value?.toFixed(1)}
+        </p>
+      ))}
+    </div>
+  )
 }
 
-const CHART_COLORS = {
-  battery: '#22d3ee',
-  temperature: '#f59e0b',
-  cpu_usage: '#a78bfa',
-}
+const EMPTY_HISTORY = []
 
-function TelemetryCharts({ robotId, telemetryHistory }) {
-  const data = telemetryHistory[robotId] || []
+const TelemetryCharts = memo(function TelemetryCharts({ robotId, telemetryHistory }) {
+  const data = telemetryHistory[robotId] || EMPTY_HISTORY
+
+  const chartData = useMemo(
+    () =>
+      data.map((d, i) => ({
+        idx: i,
+        battery: d.battery,
+        temperature: d.temperature,
+        cpu: d.cpu_usage,
+      })),
+    [data],
+  )
 
   if (data.length === 0) {
     return (
@@ -240,30 +260,6 @@ function TelemetryCharts({ robotId, telemetryHistory }) {
         <p className="text-sm text-slate-500">
           Select a robot to view telemetry charts
         </p>
-      </div>
-    )
-  }
-
-  const chartData = data.map((d, i) => ({
-    idx: i,
-    battery: d.battery,
-    temperature: d.temperature,
-    cpu: d.cpu_usage,
-  }))
-
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (!active || !payload?.length) return null
-    return (
-      <div className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 shadow-xl">
-        {payload.map((p) => (
-          <p
-            key={p.name}
-            className="text-xs"
-            style={{ color: p.color }}
-          >
-            {p.name}: {p.value?.toFixed(1)}
-          </p>
-        ))}
       </div>
     )
   }
@@ -303,7 +299,7 @@ function TelemetryCharts({ robotId, telemetryHistory }) {
               tickLine={false}
               domain={[0, 100]}
             />
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip content={<ChartTooltip />} />
             <Area
               name="Battery"
               type="monotone"
@@ -346,6 +342,21 @@ function TelemetryCharts({ robotId, telemetryHistory }) {
       </div>
     </div>
   )
+})
+
+// id -> name map whose identity only changes when a name does, so memoized
+// children (AlertPanel) don't re-render on every 2 Hz telemetry frame.
+function useStableNames(fleet) {
+  const ref = useRef({})
+  const next = {}
+  for (const r of fleet) next[r.robot_id] = r.name
+  const prev = ref.current
+  const prevKeys = Object.keys(prev)
+  const same =
+    prevKeys.length === Object.keys(next).length &&
+    prevKeys.every((k) => prev[k] === next[k])
+  if (!same) ref.current = next
+  return ref.current
 }
 
 export default function FleetMonitor({
@@ -355,12 +366,29 @@ export default function FleetMonitor({
   onSelectRobot,
   telemetryHistory,
 }) {
-  const activeCount = fleet.filter((r) => r.status === 'active').length
-  const avgBattery =
-    fleet.length > 0
-      ? fleet.reduce((sum, r) => sum + (r.battery || 0), 0) / fleet.length
-      : 0
-  const criticalAlerts = alerts.filter((a) => a.severity === 'critical').length
+  const { activeCount, errorCount, avgBattery, minBattery } = useMemo(() => {
+    let active = 0
+    let errors = 0
+    let sum = 0
+    let min = 100
+    for (const r of fleet) {
+      if (r.status === 'active') active++
+      if (r.status === 'error') errors++
+      sum += r.battery || 0
+      min = Math.min(min, r.battery || 100)
+    }
+    return {
+      activeCount: active,
+      errorCount: errors,
+      avgBattery: fleet.length > 0 ? sum / fleet.length : 0,
+      minBattery: min,
+    }
+  }, [fleet])
+  const criticalAlerts = useMemo(
+    () => alerts.filter((a) => a.severity === 'critical').length,
+    [alerts],
+  )
+  const robotNames = useStableNames(fleet)
 
   if (fleet.length === 0) {
     return (
@@ -386,7 +414,7 @@ export default function FleetMonitor({
           icon={Bot}
           label="Total Robots"
           value={fleet.length}
-          sub={`${fleet.filter((r) => r.status === 'error').length} with errors`}
+          sub={`${errorCount} with errors`}
         />
         <StatCard
           icon={Activity}
@@ -399,7 +427,7 @@ export default function FleetMonitor({
           icon={Battery}
           label="Avg Battery"
           value={`${avgBattery.toFixed(0)}%`}
-          sub={`Min: ${fleet.reduce((min, r) => Math.min(min, r.battery || 100), 100).toFixed(0)}%`}
+          sub={`Min: ${minBattery.toFixed(0)}%`}
           color={
             avgBattery > 50
               ? 'text-green-400'
@@ -441,7 +469,7 @@ export default function FleetMonitor({
 
         {/* Alerts + Telemetry Detail */}
         <div className="space-y-4">
-          <AlertPanel alerts={alerts} fleet={fleet} />
+          <AlertPanel alerts={alerts} robotNames={robotNames} />
           {selectedRobot && (
             <TelemetryPanel robot={selectedRobot} />
           )}

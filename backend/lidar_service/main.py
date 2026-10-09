@@ -10,17 +10,20 @@ on-demand scans and motion-compensated processing.
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import logging
 import math
 import random
 import time
+import zlib
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Dict, Set
 
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Response, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from lidar_simulator import Environment, LidarSimulator
@@ -61,7 +64,7 @@ def _init_robot(robot_id: str) -> None:
     """Lazily initialise a LiDAR simulator for a robot."""
     if robot_id not in _simulators:
         _simulators[robot_id] = LidarSimulator(environment=_environment)
-        rng = random.Random(hash(robot_id))
+        rng = random.Random(zlib.crc32(robot_id.encode()))  # hash(str) varies per process
         _robot_positions[robot_id] = (
             rng.uniform(20, 80),
             rng.uniform(20, 80),
@@ -90,32 +93,71 @@ def _update_robot_position(robot_id: str, dt: float = 0.2) -> None:
     _robot_headings[robot_id] = heading
 
 
-def _generate_scan(robot_id: str) -> dict:
-    """Generate a scan, update position, and return a JSON-friendly dict."""
+_scan_locks: Dict[str, asyncio.Lock] = {}
+
+# All CPU-bound work (ray-casting, JSON encoding) runs on ONE dedicated thread.
+# numpy and json.dumps hold the GIL for long stretches; with a wide thread pool
+# several of them queue up and the event-loop thread starves behind the lot
+# (measured: 100-150 ms stalls with the default pool, vs. one scan's worth here).
+_cpu_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lidar-cpu")
+
+
+async def _cpu(fn, *args):
+    return await asyncio.get_running_loop().run_in_executor(_cpu_pool, fn, *args)
+
+
+async def _scan_async(robot_id: str, max_stream_points: int = 2000) -> str:
+    """
+    Advance the robot, ray-cast on a worker thread, and return the scan as JSON text.
+
+    ``generate_scan`` is CPU-bound numpy; running it inline would stall the event
+    loop (and every other client/health probe) for its whole duration.  A per-robot
+    lock serialises scans of the same simulator (its noise generator isn't thread-safe).
+    """
     _init_robot(robot_id)
-    _update_robot_position(robot_id)
+    lock = _scan_locks.setdefault(robot_id, asyncio.Lock())
+    async with lock:
+        _update_robot_position(robot_id)
+        sim = _simulators[robot_id]
+        pos = _robot_positions[robot_id]
+        heading = _robot_headings[robot_id]
+        raw_points = await _cpu(sim.generate_scan, pos, heading)
+        _frame_counters[robot_id] = _frame_counters.get(robot_id, 0) + 1
+        frame_id = _frame_counters[robot_id]
+    # Serialising ~10k points costs tens of ms (FastAPI's jsonable_encoder alone is
+    # ~60 ms for a full scan); do it off the loop and hand back ready-made text.
+    return await _cpu(_scan_json, robot_id, raw_points, max_stream_points, frame_id)
 
-    sim = _simulators[robot_id]
-    pos = _robot_positions[robot_id]
-    heading = _robot_headings[robot_id]
 
-    raw_points = sim.generate_scan(pos, heading)
-    _frame_counters[robot_id] = _frame_counters.get(robot_id, 0) + 1
-
-    return _scan_to_dict(robot_id, raw_points)
+def _scan_json(robot_id: str, points: np.ndarray, max_stream_points: int, frame_id: int) -> str:
+    """
+    Serialise a scan.  ``json.dumps`` holds the GIL for its whole C call (~30 ms for
+    a full scan), so the points are encoded in slices with a ``sleep(0)`` between
+    them to let the event-loop thread run.  Output is identical to a single dumps.
+    """
+    d = _scan_to_dict(robot_id, points, max_stream_points, frame_id)
+    pts = d.pop("points")
+    parts = []
+    for i in range(0, len(pts), 1000):
+        parts.append(json.dumps(pts[i:i + 1000])[1:-1])
+        time.sleep(0)  # release the GIL
+    head = json.dumps(d)
+    return head[:-1] + ', "points": [' + ", ".join(parts) + "]}"
 
 
 def _scan_to_dict(
     robot_id: str,
     points: np.ndarray,
     max_stream_points: int = 2000,
+    frame_id: int | None = None,
 ) -> dict:
     """Convert a numpy scan to a JSON-serialisable dict (downsampled)."""
     n = points.shape[0]
 
-    # Downsample for streaming efficiency
+    # Downsample for streaming efficiency.  Evenly strided (not random) so the
+    # azimuthal ordering that MotionCompensator's per-point timestamps rely on is kept.
     if n > max_stream_points:
-        indices = np.random.choice(n, max_stream_points, replace=False)
+        indices = np.linspace(0, n - 1, max_stream_points).astype(np.intp)
         pts = points[indices]
     else:
         pts = points
@@ -123,8 +165,10 @@ def _scan_to_dict(
     return {
         "robot_id": robot_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "points": np.round(pts, 3).tolist(),
-        "frame_id": _frame_counters.get(robot_id, 0),
+        # Round in float64: rounding float32 and converting with tolist() yields reprs like
+        # 56.43299865722656 (81 B/point instead of 32), which bloats the frame 2.5x.
+        "points": np.round(pts.astype(np.float64), 3).tolist(),
+        "frame_id": _frame_counters.get(robot_id, 0) if frame_id is None else frame_id,
         "num_points": int(pts.shape[0]),
     }
 
@@ -138,7 +182,13 @@ async def lifespan(app: FastAPI):
     logger.info("LiDAR Service starting, pre-initialising %d robots", len(_DEFAULT_ROBOTS))
     for rid in _DEFAULT_ROBOTS:
         _init_robot(rid)
+    # Everything allocated so far (FastAPI, numpy, the environment) lives for the whole
+    # process.  Freezing it keeps full (gen-2) collections from re-traversing ~70k objects:
+    # those passes measured 25-55 ms, i.e. a quarter of a frame period of loop stall.
+    gc.collect()
+    gc.freeze()
     yield
+    await hub.shutdown()
     logger.info("LiDAR Service shutting down")
 
 
@@ -173,18 +223,8 @@ async def health():
 @app.get("/scan/{robot_id}")
 async def get_scan(robot_id: str):
     """Return the latest LiDAR scan for a robot (full resolution)."""
-    _init_robot(robot_id)
-    _update_robot_position(robot_id)
-
-    sim = _simulators[robot_id]
-    pos = _robot_positions[robot_id]
-    heading = _robot_headings[robot_id]
-
-    raw_points = sim.generate_scan(pos, heading)
-    _frame_counters[robot_id] = _frame_counters.get(robot_id, 0) + 1
-
-    # Return full scan (not downsampled) for REST endpoint
-    return _scan_to_dict(robot_id, raw_points, max_stream_points=15000)
+    text = await _scan_async(robot_id, max_stream_points=15000)
+    return Response(content=text, media_type="application/json")
 
 
 # ---------------------------------------------------------------------------
@@ -204,25 +244,94 @@ async def process_scan(req: ProcessRequest):
     IMU data.  Returns the de-skewed point cloud.
     """
     _init_robot(req.robot_id)
-    _update_robot_position(req.robot_id)
+    lock = _scan_locks.setdefault(req.robot_id, asyncio.Lock())
+    async with lock:
+        _update_robot_position(req.robot_id)
+        sim = _simulators[req.robot_id]
+        pos = _robot_positions[req.robot_id]
+        heading = _robot_headings[req.robot_id]
 
-    sim = _simulators[req.robot_id]
-    pos = _robot_positions[req.robot_id]
-    heading = _robot_headings[req.robot_id]
+        def work():
+            raw = sim.generate_scan(pos, heading)
+            return _compensator.compensate_vectorized(raw, req.imu_data, req.scan_duration)
 
-    raw = sim.generate_scan(pos, heading)
-    _frame_counters[req.robot_id] = _frame_counters.get(req.robot_id, 0) + 1
+        compensated = await _cpu(work)
+        _frame_counters[req.robot_id] = _frame_counters.get(req.robot_id, 0) + 1
+        frame_id = _frame_counters[req.robot_id]
 
-    compensated = _compensator.compensate_vectorized(
-        raw, req.imu_data, req.scan_duration
-    )
-
-    return _scan_to_dict(req.robot_id, compensated)
+    text = await _cpu(_scan_json, req.robot_id, compensated, 2000, frame_id)
+    return Response(content=text, media_type="application/json")
 
 
 # ---------------------------------------------------------------------------
 # WebSocket: LiDAR stream (~5 Hz)
 # ---------------------------------------------------------------------------
+
+class ScanHub:
+    """
+    One producer task per robot, fanned out to any number of subscribers.
+
+    Previously every WebSocket client ray-cast its own scan of the same robot, so
+    N viewers cost N times the CPU *and* advanced the robot N times per tick.  Now
+    the producer runs at 5 Hz while at least one client is connected, serialises the
+    frame to JSON once, and hands the same string to every subscriber.  Each
+    subscriber has a 1-slot queue: a slow client drops stale frames, it never
+    delays the producer or other clients.
+    """
+
+    PERIOD = 0.2  # 5 Hz
+
+    def __init__(self) -> None:
+        self._subs: Dict[str, Set[asyncio.Queue]] = {}
+        self._tasks: Dict[str, asyncio.Task] = {}
+
+    def subscribe(self, robot_id: str) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=1)
+        self._subs.setdefault(robot_id, set()).add(q)
+        task = self._tasks.get(robot_id)
+        if task is None or task.done():
+            self._tasks[robot_id] = asyncio.create_task(self._produce(robot_id))
+        return q
+
+    def unsubscribe(self, robot_id: str, q: asyncio.Queue) -> None:
+        subs = self._subs.get(robot_id)
+        if subs is not None:
+            subs.discard(q)
+            if not subs:
+                del self._subs[robot_id]
+                task = self._tasks.pop(robot_id, None)
+                if task:
+                    task.cancel()
+
+    async def _produce(self, robot_id: str) -> None:
+        next_tick = time.monotonic()
+        while True:
+            try:
+                frame = await _scan_async(robot_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("LiDAR producer error for %s", robot_id)
+                frame = None
+            if frame is not None:
+                for q in tuple(self._subs.get(robot_id, ())):
+                    if q.full():
+                        q.get_nowait()  # drop the stale frame for a slow client
+                    q.put_nowait(frame)
+            next_tick += self.PERIOD
+            await asyncio.sleep(max(0.0, next_tick - time.monotonic()))
+
+    async def shutdown(self) -> None:
+        tasks = list(self._tasks.values())
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
+        self._subs.clear()
+
+
+hub = ScanHub()
+
 
 @app.websocket("/ws/lidar/{robot_id}")
 async def ws_lidar_stream(ws: WebSocket, robot_id: str):
@@ -230,16 +339,35 @@ async def ws_lidar_stream(ws: WebSocket, robot_id: str):
     await ws.accept()
     logger.info("LiDAR WS client connected for %s", robot_id)
     _init_robot(robot_id)
+    q = hub.subscribe(robot_id)
 
+    async def watch_disconnect() -> None:
+        # The stream is send-only, but we must still read so a client going away is
+        # noticed immediately rather than at the next frame (or never, if the
+        # producer has stopped).  Anything the client sends is ignored.
+        try:
+            while True:
+                await ws.receive_text()
+        except Exception:
+            return
+
+    watcher = asyncio.create_task(watch_disconnect())
     try:
         while True:
-            scan = _generate_scan(robot_id)
-            await ws.send_text(json.dumps(scan))
-            await asyncio.sleep(0.2)  # 5 Hz
+            getter = asyncio.ensure_future(q.get())
+            done, _ = await asyncio.wait({getter, watcher}, return_when=asyncio.FIRST_COMPLETED)
+            if watcher in done:
+                getter.cancel()
+                break
+            await ws.send_text(getter.result())
     except WebSocketDisconnect:
-        logger.info("LiDAR WS client disconnected for %s", robot_id)
+        pass
     except Exception as exc:
         logger.error("LiDAR WS error for %s: %s", robot_id, exc)
+    finally:
+        watcher.cancel()
+        hub.unsubscribe(robot_id, q)
+        logger.info("LiDAR WS client disconnected for %s", robot_id)
 
 
 # ---------------------------------------------------------------------------
@@ -255,4 +383,5 @@ if __name__ == "__main__":
         port=8001,
         reload=False,
         log_level="info",
+        ws_per_message_deflate=False,  # see Dockerfile
     )

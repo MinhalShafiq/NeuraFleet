@@ -44,7 +44,8 @@ class LLMClient:
         if self._api_key:
             try:
                 import anthropic
-                self._client = anthropic.Anthropic(api_key=self._api_key)
+                # Async client: the sync one blocks the event loop for the whole LLM round trip.
+                self._client = anthropic.AsyncAnthropic(api_key=self._api_key)
                 logger.info("Anthropic client initialised (model=%s)", self._model)
             except Exception as exc:
                 logger.warning("Failed to initialise Anthropic client: %s", exc)
@@ -102,7 +103,7 @@ class LLMClient:
         )
 
         try:
-            message = self._client.messages.create(
+            message = await self._client.messages.create(
                 model=self._model,
                 max_tokens=1024,
                 system=self.SYSTEM_PROMPT,

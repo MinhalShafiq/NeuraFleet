@@ -1,91 +1,72 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
-import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { OrbitControls, Stats, Text } from '@react-three/drei'
+import { Canvas, useThree } from '@react-three/fiber'
+import { OrbitControls, Stats } from '@react-three/drei'
 import * as THREE from 'three'
 import { Radar, ChevronDown } from 'lucide-react'
 import clsx from 'clsx'
 import { createLidarSocket } from '../services/api'
 
-function intensityToColor(intensity, minI, rangeI) {
-  const t = rangeI > 0 ? (intensity - minI) / rangeI : 0.5
-  const r = Math.min(1, Math.max(0, t < 0.5 ? 0 : (t - 0.5) * 2))
-  const g = Math.min(1, Math.max(0, t < 0.5 ? t * 2 : 1 - (t - 0.5) * 2))
-  const b = Math.min(1, Math.max(0, t < 0.5 ? 1 - t * 2 : 0))
-  return [r, g, b]
+// GPU buffers are allocated once at this size and reused for every frame
+// (the REST scan tops out at 15,000 points; the stream sends ~2,000).
+const MAX_POINTS = 20000
+
+// Blue -> green -> red ramp for intensity in [0, 1] (the simulator already clamps it).
+// Writes straight into the colour buffer: no per-point array allocation.
+function writeIntensityColor(out, offset, intensity) {
+  const t = intensity < 0 ? 0 : intensity > 1 ? 1 : intensity
+  if (t < 0.5) {
+    out[offset] = 0
+    out[offset + 1] = t * 2
+    out[offset + 2] = 1 - t * 2
+  } else {
+    out[offset] = (t - 0.5) * 2
+    out[offset + 1] = 1 - (t - 0.5) * 2
+    out[offset + 2] = 0
+  }
 }
 
 function PointCloud({ lidarData }) {
-  const pointsRef = useRef()
-  const [positions, setPositions] = useState(null)
-  const [colors, setColors] = useState(null)
+  // One geometry, created once.  Frames overwrite its buffers in place and move the
+  // draw range, so nothing is reallocated or re-created per message.
+  const geometry = useMemo(() => {
+    const g = new THREE.BufferGeometry()
+    const pos = new THREE.BufferAttribute(new Float32Array(MAX_POINTS * 3), 3)
+    const col = new THREE.BufferAttribute(new Float32Array(MAX_POINTS * 3), 3)
+    pos.setUsage(THREE.DynamicDrawUsage)
+    col.setUsage(THREE.DynamicDrawUsage)
+    g.setAttribute('position', pos)
+    g.setAttribute('color', col)
+    g.setDrawRange(0, 0)
+    return g
+  }, [])
 
+  useEffect(() => () => geometry.dispose(), [geometry])
+
+  // Runs once per received message (~5 Hz), not once per rendered frame (60 Hz).
   useEffect(() => {
-    if (!lidarData || !lidarData.points || lidarData.points.length === 0) {
-      setPositions(null)
-      setColors(null)
-      return
-    }
-
-    const pts = lidarData.points
-    const numPts = pts.length
-    const posArr = new Float32Array(numPts * 3)
-    const colArr = new Float32Array(numPts * 3)
-
-    let minI = Infinity
-    let maxI = -Infinity
-    for (let i = 0; i < numPts; i++) {
-      const intensity = pts[i][3] || 0
-      if (intensity < minI) minI = intensity
-      if (intensity > maxI) maxI = intensity
-    }
-    const rangeI = maxI - minI
-
-    for (let i = 0; i < numPts; i++) {
-      const p = pts[i]
-      posArr[i * 3] = p[0]
-      posArr[i * 3 + 1] = p[2] || 0
-      posArr[i * 3 + 2] = p[1]
-
-      const [r, g, b] = intensityToColor(p[3] || 0, minI, rangeI)
-      colArr[i * 3] = r
-      colArr[i * 3 + 1] = g
-      colArr[i * 3 + 2] = b
-    }
-
-    setPositions(posArr)
-    setColors(colArr)
-  }, [lidarData])
-
-  useFrame(() => {
-    if (pointsRef.current) {
-      const geom = pointsRef.current.geometry
-      if (geom.attributes.position) {
-        geom.attributes.position.needsUpdate = true
+    const pts = lidarData?.points
+    const n = pts ? Math.min(pts.length, MAX_POINTS) : 0
+    if (n > 0) {
+      const posArr = geometry.attributes.position.array
+      const colArr = geometry.attributes.color.array
+      for (let i = 0; i < n; i++) {
+        const p = pts[i]
+        const o = i * 3
+        // LiDAR frame is z-up; three.js is y-up.
+        posArr[o] = p[0]
+        posArr[o + 1] = p[2] || 0
+        posArr[o + 2] = p[1]
+        writeIntensityColor(colArr, o, p[3] || 0)
       }
-      if (geom.attributes.color) {
-        geom.attributes.color.needsUpdate = true
-      }
+      geometry.attributes.position.needsUpdate = true
+      geometry.attributes.color.needsUpdate = true
     }
-  })
-
-  if (!positions || !colors) return null
+    geometry.setDrawRange(0, n)
+  }, [lidarData, geometry])
 
   return (
-    <points ref={pointsRef}>
-      <bufferGeometry>
-        <bufferAttribute
-          attach="attributes-position"
-          count={positions.length / 3}
-          array={positions}
-          itemSize={3}
-        />
-        <bufferAttribute
-          attach="attributes-color"
-          count={colors.length / 3}
-          array={colors}
-          itemSize={3}
-        />
-      </bufferGeometry>
+    // frustumCulled off: the bounding sphere is computed once and these points move.
+    <points geometry={geometry} frustumCulled={false}>
       <pointsMaterial
         size={0.05}
         vertexColors
@@ -132,8 +113,15 @@ function Scene({ lidarData }) {
 }
 
 export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }) {
-  const [lidarData, setLidarData] = useState(null)
-  const [frameInfo, setFrameInfo] = useState(null)
+  // One state object per message => one render per message (was two setState calls).
+  const [frame, setFrame] = useState(null)
+  const lidarData = frame
+  const frameInfo = frame && {
+    frameId: frame.frame_id,
+    numPoints: frame.num_points,
+    timestamp: frame.timestamp,
+    robotId: frame.robot_id,
+  }
   const [wsConnected, setWsConnected] = useState(false)
   const [showDropdown, setShowDropdown] = useState(false)
   const [showStats, setShowStats] = useState(false)
@@ -163,14 +151,7 @@ export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }
 
         ws.onmessage = (event) => {
           try {
-            const data = JSON.parse(event.data)
-            setLidarData(data)
-            setFrameInfo({
-              frameId: data.frame_id,
-              numPoints: data.num_points,
-              timestamp: data.timestamp,
-              robotId: data.robot_id,
-            })
+            setFrame(JSON.parse(event.data))
           } catch (err) {
             console.error('Failed to parse LiDAR data:', err)
           }
@@ -196,8 +177,7 @@ export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }
   )
 
   useEffect(() => {
-    setLidarData(null)
-    setFrameInfo(null)
+    setFrame(null)
 
     if (robotId) {
       connectLidar(robotId)

@@ -17,8 +17,7 @@ jobs:
           cache-dependency-path: |
             backend/*/requirements.txt
             tests/requirements.txt
-      - run: pip install -r backend/gateway/requirements.txt -r backend/lidar_service/requirements.txt -r backend/telemetry_service/requirements.txt -r tests/requirements.txt
-      - run: pip install chromadb==0.4.18
+      - run: pip install -r backend/gateway/requirements.txt -r backend/lidar_service/requirements.txt -r backend/telemetry_service/requirements.txt -r backend/rag_service/requirements.txt -r tests/requirements.txt
       - run: pytest tests -v
 
   frontend-build:

@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { memo } from 'react'
 import {
   Navigation,
   Gauge,
@@ -79,7 +79,7 @@ function Section({ title, icon: Icon, children }) {
   )
 }
 
-export default function TelemetryPanel({ robot }) {
+function TelemetryPanel({ robot }) {
   if (!robot) {
     return (
       <div className="glass-panel p-4">
@@ -213,3 +213,5 @@ export default function TelemetryPanel({ robot }) {
     </div>
   )
 }
+
+export default memo(TelemetryPanel)

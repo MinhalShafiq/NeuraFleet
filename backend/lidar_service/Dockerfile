@@ -27,4 +27,7 @@ USER appuser
 EXPOSE 8001
 
 # Single worker: simulation state lives in process memory (see OPTIMIZATION_PLAN 0.2).
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+# --ws-per-message-deflate false: this stream is an internal hop, and uvicorn compresses each
+# frame once per viewer synchronously on the event-loop thread (~11 ms per 160 KB frame, which
+# stalled the loop ~35 ms/tick with 3 viewers).  Compression on the public leg belongs to the gateway.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1", "--ws-per-message-deflate", "false"]

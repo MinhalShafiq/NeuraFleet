@@ -13,6 +13,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
+from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -67,7 +68,7 @@ app = FastAPI(
 
 @app.get("/health")
 async def health():
-    doc_count = vector_store._collection.count() if vector_store else 0
+    doc_count = await run_in_threadpool(vector_store._collection.count) if vector_store else 0
     return {
         "status": "ok",
         "documents": doc_count,
@@ -120,7 +121,8 @@ async def query_rag(req: QueryRequest):
         pass
 
     # Retrieve relevant chunks
-    results = vector_store.query(
+    results = await run_in_threadpool(
+        vector_store.query,
         query_text=req.query,
         n_results=5,
         filter=vs_filter,
@@ -152,7 +154,7 @@ async def list_documents():
     """List all documents in the vector store."""
     if vector_store is None:
         return []
-    return vector_store.list_documents()
+    return await run_in_threadpool(vector_store.list_documents)
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +172,7 @@ async def ingest_documents(req: IngestRequest):
     if vector_store is None:
         raise HTTPException(status_code=503, detail="Service not ready")
 
-    added = vector_store.add_documents(req.documents)
+    added = await run_in_threadpool(vector_store.add_documents, req.documents)
     return IngestResponse(added=added)
 
 

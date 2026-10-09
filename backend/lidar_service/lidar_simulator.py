@@ -132,6 +132,8 @@ class LidarSimulator:
         Horizontal angular resolution in degrees (default 0.4).
     v_fov : tuple[float, float]
         Vertical field-of-view in degrees (min, max), default (-15, +15).
+    seed : int, optional
+        Seed for the measurement-noise generator (default: nondeterministic).
     """
 
     def __init__(
@@ -141,6 +143,7 @@ class LidarSimulator:
         num_channels: int = 16,
         h_resolution: float = 0.4,
         v_fov: Tuple[float, float] = (-15.0, 15.0),
+        seed: int | None = None,
     ):
         self.env = environment or Environment()
         self.max_range = max_range
@@ -157,99 +160,78 @@ class LidarSimulator:
         self._h_angles = np.arange(0, 360, h_resolution)
         self._h_angles_rad = np.radians(self._h_angles)
 
+        # Unit ray directions for heading = 0, flattened h-major / channel-minor
+        # (the same order the scalar implementation emitted points in).  A robot
+        # heading is then a single 2D rotation of (dx, dy); dz never changes.
+        cos_v, sin_v = np.cos(self._v_angles), np.sin(self._v_angles)
+        cos_h, sin_h = np.cos(self._h_angles_rad), np.sin(self._h_angles_rad)
+        self._dx0 = (cos_h[:, None] * cos_v[None, :]).ravel()
+        self._dy0 = (sin_h[:, None] * cos_v[None, :]).ravel()
+        self._dz = np.broadcast_to(sin_v[None, :], (len(cos_h), len(cos_v))).ravel().copy()
+
+        self._rng = np.random.default_rng(seed)
+
     # ------------------------------------------------------------------
-    # Ray-casting helpers
+    # Vectorized ray-casting helpers.  Each takes the (N,) ray directions and
+    # returns an (N,) array of hit distances, +inf where the ray misses.
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _ray_box_distance(
-        ox: float, oy: float, oz: float,
-        dx: float, dy: float, dz: float,
-        box: Box,
-    ) -> float | None:
-        """Axis-aligned box ray intersection distance (or None)."""
-        x_min = box.cx - box.half_w
-        x_max = box.cx + box.half_w
-        y_min = box.cy - box.half_d
-        y_max = box.cy + box.half_d
-        z_min = 0.0
-        z_max = box.height
-
-        tmin = -1e30
-        tmax = 1e30
-        for axis, (o, d, lo, hi) in enumerate([
-            (ox, dx, x_min, x_max),
-            (oy, dy, y_min, y_max),
-            (oz, dz, z_min, z_max),
-        ]):
-            if abs(d) < 1e-12:
-                if o < lo or o > hi:
-                    return None
-            else:
-                t1 = (lo - o) / d
-                t2 = (hi - o) / d
-                if t1 > t2:
-                    t1, t2 = t2, t1
-                tmin = max(tmin, t1)
-                tmax = min(tmax, t2)
-                if tmin > tmax:
-                    return None
-        if tmin < 0:
-            return None
-        return tmin
+    def _boxes_hit(ox, oy, oz, dx, dy, dz, box: Box) -> np.ndarray:
+        """Axis-aligned box via the slab method (origin inside a box counts as a miss)."""
+        n = dx.shape[0]
+        tmin = np.full(n, -1e30)
+        tmax = np.full(n, 1e30)
+        ok = np.ones(n, dtype=bool)
+        for o, d, lo, hi in (
+            (ox, dx, box.cx - box.half_w, box.cx + box.half_w),
+            (oy, dy, box.cy - box.half_d, box.cy + box.half_d),
+            (oz, dz, 0.0, box.height),
+        ):
+            parallel = np.abs(d) < 1e-12
+            if o < lo or o > hi:
+                ok &= ~parallel
+            safe = np.where(parallel, 1.0, d)
+            t1 = (lo - o) / safe
+            t2 = (hi - o) / safe
+            near = np.where(parallel, -1e30, np.minimum(t1, t2))
+            far = np.where(parallel, 1e30, np.maximum(t1, t2))
+            tmin = np.maximum(tmin, near)
+            tmax = np.minimum(tmax, far)
+        ok &= (tmin <= tmax) & (tmin >= 0)
+        return np.where(ok, tmin, np.inf)
 
     @staticmethod
-    def _ray_cylinder_distance(
-        ox: float, oy: float, oz: float,
-        dx: float, dy: float, dz: float,
-        cyl: Cylinder,
-    ) -> float | None:
-        """Infinite-height cylinder, then clamp to height."""
-        # Shift origin
-        lx = ox - cyl.cx
-        ly = oy - cyl.cy
+    def _cylinders_hit(ox, oy, oz, dx, dy, dz, cyl: Cylinder) -> np.ndarray:
+        """Vertical cylinder: nearest positive root whose hit height is within [0, height]."""
+        lx, ly = ox - cyl.cx, oy - cyl.cy
         a = dx * dx + dy * dy
         b = 2 * (lx * dx + ly * dy)
         c = lx * lx + ly * ly - cyl.radius * cyl.radius
         disc = b * b - 4 * a * c
-        if disc < 0 or a < 1e-12:
-            return None
-        sqrt_disc = math.sqrt(disc)
-        t1 = (-b - sqrt_disc) / (2 * a)
-        t2 = (-b + sqrt_disc) / (2 * a)
-        for t in (t1, t2):
-            if t > 0:
-                z_hit = oz + t * dz
-                if 0 <= z_hit <= cyl.height:
-                    return t
-        return None
+        valid = (disc >= 0) & (a >= 1e-12)
+        sqrt_disc = np.sqrt(np.where(valid, disc, 0.0))
+        denom = np.where(valid, 2 * a, 1.0)
+        t1 = (-b - sqrt_disc) / denom
+        t2 = (-b + sqrt_disc) / denom
+        ok1 = valid & (t1 > 0) & (oz + t1 * dz >= 0) & (oz + t1 * dz <= cyl.height)
+        ok2 = valid & (t2 > 0) & (oz + t2 * dz >= 0) & (oz + t2 * dz <= cyl.height)
+        return np.where(ok1, t1, np.where(ok2, t2, np.inf))
 
     @staticmethod
-    def _ray_wall_distance(
-        ox: float, oy: float, oz: float,
-        dx: float, dy: float, dz: float,
-        wall: Wall,
-    ) -> float | None:
-        """Thin vertical plane segment intersection."""
-        wx = wall.x2 - wall.x1
-        wy = wall.y2 - wall.y1
+    def _walls_hit(ox, oy, oz, dx, dy, dz, wall: Wall) -> np.ndarray:
+        """Thin vertical plane segment."""
+        wx, wy = wall.x2 - wall.x1, wall.y2 - wall.y1
         denom = dx * wy - dy * wx
-        if abs(denom) < 1e-12:
-            return None
-        t = ((wall.x1 - ox) * wy - (wall.y1 - oy) * wx) / denom
-        if t < 0:
-            return None
-        # Check wall parameter s (0..1)
+        valid = np.abs(denom) >= 1e-12
+        t = ((wall.x1 - ox) * wy - (wall.y1 - oy) * wx) / np.where(valid, denom, 1.0)
         if abs(wx) > abs(wy):
             s = (ox + t * dx - wall.x1) / wx
         else:
             s = (oy + t * dy - wall.y1) / wy
-        if s < 0 or s > 1:
-            return None
         z_hit = oz + t * dz
-        if z_hit < 0 or z_hit > wall.height:
-            return None
-        return t
+        ok = valid & (t >= 0) & (s >= 0) & (s <= 1) & (z_hit >= 0) & (z_hit <= wall.height)
+        return np.where(ok, t, np.inf)
 
     # ------------------------------------------------------------------
     # Main scan generation
@@ -259,6 +241,7 @@ class LidarSimulator:
         self,
         robot_position: Tuple[float, float, float],
         robot_heading: float,
+        noise: bool = True,
     ) -> np.ndarray:
         """
         Generate one complete 360-degree LiDAR scan.
@@ -267,80 +250,50 @@ class LidarSimulator:
         ----------
         robot_position : (x, y, z)  in world frame
         robot_heading  : radians, 0 = +X
+        noise : add Gaussian range/intensity noise (disable for reference tests)
 
         Returns
         -------
-        np.ndarray of shape (N, 4) with columns [x, y, z, intensity].
+        np.ndarray of shape (N, 4) with columns [x, y, z, intensity], ordered
+        by azimuth then channel (``MotionCompensator`` relies on this order).
         N typically ranges from ~5 000 to ~15 000.
         """
         ox, oy, oz = robot_position
         oz += 1.8  # sensor mounted 1.8 m above ground
 
-        points: list = []
+        c, s = math.cos(robot_heading), math.sin(robot_heading)
+        dx = self._dx0 * c - self._dy0 * s
+        dy = self._dx0 * s + self._dy0 * c
+        dz = self._dz
 
-        for h_angle in self._h_angles_rad:
-            # Apply robot heading
-            abs_h = h_angle + robot_heading
-            cos_h = math.cos(abs_h)
-            sin_h = math.sin(abs_h)
+        best = np.full(dx.shape[0], self.max_range)
 
-            for v_angle in self._v_angles:
-                cos_v = math.cos(v_angle)
-                sin_v = math.sin(v_angle)
+        # Ground plane (z = 0)
+        down = dz < -1e-6
+        t_ground = np.where(down, -oz / np.where(down, dz, -1.0), np.inf)
+        t_ground = np.where(t_ground > 0, t_ground, np.inf)
+        best = np.where(t_ground < best, t_ground, best)
 
-                dx = cos_h * cos_v
-                dy = sin_h * cos_v
-                dz = sin_v
+        for box in self.env.boxes:
+            best = np.minimum(best, self._boxes_hit(ox, oy, oz, dx, dy, dz, box))
+        for cyl in self.env.cylinders:
+            best = np.minimum(best, self._cylinders_hit(ox, oy, oz, dx, dy, dz, cyl))
+        for wall in self.env.walls:
+            best = np.minimum(best, self._walls_hit(ox, oy, oz, dx, dy, dz, wall))
 
-                best_t = self.max_range
-                hit = False
-
-                # Ground plane (z = 0)
-                if dz < -1e-6:
-                    t_ground = -oz / dz
-                    if 0 < t_ground < best_t:
-                        best_t = t_ground
-                        hit = True
-
-                # Boxes
-                for box in self.env.boxes:
-                    t = self._ray_box_distance(ox, oy, oz, dx, dy, dz, box)
-                    if t is not None and t < best_t:
-                        best_t = t
-                        hit = True
-
-                # Cylinders
-                for cyl in self.env.cylinders:
-                    t = self._ray_cylinder_distance(ox, oy, oz, dx, dy, dz, cyl)
-                    if t is not None and t < best_t:
-                        best_t = t
-                        hit = True
-
-                # Walls
-                for wall in self.env.walls:
-                    t = self._ray_wall_distance(ox, oy, oz, dx, dy, dz, wall)
-                    if t is not None and t < best_t:
-                        best_t = t
-                        hit = True
-
-                if hit:
-                    px = ox + best_t * dx
-                    py = oy + best_t * dy
-                    pz = oz + best_t * dz
-                    # Intensity: inversely proportional to distance, with noise
-                    intensity = max(
-                        0.0,
-                        min(1.0, (1.0 - best_t / self.max_range) + random.gauss(0, 0.03)),
-                    )
-                    # Add Gaussian noise to the point
-                    noise_std = 0.01  # 1 cm
-                    px += random.gauss(0, noise_std)
-                    py += random.gauss(0, noise_std)
-                    pz += random.gauss(0, noise_std)
-                    points.append([px, py, pz, intensity])
-
-        if not points:
-            # Degenerate case: return a minimal scan
+        # A ray that found nothing closer than max_range is a miss (strict <).
+        hit = best < self.max_range
+        if not hit.any():
             return np.zeros((1, 4), dtype=np.float32)
 
-        return np.array(points, dtype=np.float32)
+        t = best[hit]
+        pts = np.empty((t.shape[0], 4))
+        pts[:, 0] = ox + t * dx[hit]
+        pts[:, 1] = oy + t * dy[hit]
+        pts[:, 2] = oz + t * dz[hit]
+        intensity = 1.0 - t / self.max_range
+        if noise:
+            intensity = intensity + self._rng.normal(0.0, 0.03, t.shape[0])
+            pts[:, :3] += self._rng.normal(0.0, 0.01, (t.shape[0], 3))  # 1 cm
+        pts[:, 3] = np.clip(intensity, 0.0, 1.0)
+        return pts.astype(np.float32)

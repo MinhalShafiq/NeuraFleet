@@ -53,6 +53,7 @@ _ROBOT_NAMES = [
 ]
 
 _mock_frame_counter: int = 0
+_HEALTH_PROBE_TIMEOUT = 2.0  # seconds, per downstream service (probed concurrently)
 
 
 def _ts() -> str:
@@ -277,22 +278,31 @@ async def liveness():
     return {"status": "ok"}
 
 
+async def _probe(name: str, url: str) -> tuple:
+    try:
+        client = await _get_client()
+        r = await client.get(f"{url}/health", timeout=_HEALTH_PROBE_TIMEOUT)
+        return name, ("healthy" if r.status_code == 200 else "degraded")
+    except Exception:
+        return name, "unreachable"
+
+
 @app.get("/api/health")
 async def health():
-    """Gateway health check.  Also probes downstream services."""
-    services: Dict[str, str] = {}
-    for name, url in [
-        ("telemetry", settings.telemetry_service_url),
-        ("lidar", settings.lidar_service_url),
-        ("rag", settings.rag_service_url),
-    ]:
-        try:
-            client = await _get_client()
-            r = await client.get(f"{url}/health", timeout=3.0)
-            services[name] = "healthy" if r.status_code == 200 else "degraded"
-        except Exception:
-            services[name] = "unreachable"
-    return {"status": "ok", "services": services}
+    """
+    Observability endpoint: gateway status plus each downstream service.
+
+    Probes run concurrently, so the worst case is one timeout (2 s), not the sum
+    of three.  This is NOT the k8s probe target (that is ``/health``): the gateway
+    serves mock data when a service is down, so a sick dependency must not pull
+    gateway pods out of rotation.
+    """
+    results = await asyncio.gather(
+        _probe("telemetry", settings.telemetry_service_url),
+        _probe("lidar", settings.lidar_service_url),
+        _probe("rag", settings.rag_service_url),
+    )
+    return {"status": "ok", "services": dict(results)}
 
 
 # ---------------------------------------------------------------------------
