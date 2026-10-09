@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# NeuraFleet - test everything from Phase 1 and Phase 2.
+# NeuraFleet - run every check: unit tests, lint, types, frontend, and the live Docker stack.
 #
-#   scripts/test.sh              unit tests + frontend build + live-stack checks (if the stack is up)
+#   scripts/test.sh              everything below; the live-stack part is skipped if the stack isn't running
 #   scripts/test.sh --up         ...and (re)build + start the Docker stack first
-#   scripts/test.sh --unit       only the pytest suite (fast, no Docker/Node needed)
+#   scripts/test.sh --unit       pytest + ruff + mypy only (fast, no Docker/Node needed)
 #   scripts/test.sh --no-restart skip restarting rag-service (persistence check)
 #   scripts/test.sh --no-chaos   skip stopping telemetry-service (demo-data fallback + recovery check)
 #   scripts/test.sh --no-load    skip the 3-viewer streaming load test
@@ -47,7 +47,7 @@ else
   fail "pytest not installed" "run: uv venv --python 3.11 .venv && uv pip install --python .venv/bin/python -r backend/{gateway,lidar_service,telemetry_service,rag_service}/requirements.txt -r tests/requirements.txt"
 fi
 
-section "Lint, types, frontend tests"
+section "Lint and types"
 if "$PY" -m ruff --version >/dev/null 2>&1; then
   "$PY" -m ruff check backend tests scripts >/dev/null 2>&1 && pass "ruff check" || fail "ruff check" "run: .venv/bin/ruff check backend tests scripts"
   "$PY" -m ruff format --check backend tests scripts >/dev/null 2>&1 && pass "ruff format --check" || fail "ruff format --check" "run: .venv/bin/ruff format backend tests scripts"
@@ -63,9 +63,12 @@ summary() {
 [ $UNIT_ONLY -eq 1 ] && summary
 
 # ---------------------------------------------------------------------------
-section "Frontend build"
+section "Frontend"
 if command -v npm >/dev/null; then
   if [ ! -d frontend/dashboard/node_modules ]; then (cd frontend/dashboard && npm ci --no-audit --no-fund --loglevel=error >/dev/null 2>&1); fi
+  (cd frontend/dashboard && npm run lint >/dev/null 2>&1) && pass "eslint" || fail "eslint" "run: cd frontend/dashboard && npm run lint"
+  (cd frontend/dashboard && npm run format:check >/dev/null 2>&1) && pass "prettier --check" || fail "prettier" "run: cd frontend/dashboard && npm run format"
+  if OUT=$(cd frontend/dashboard && npm test 2>&1); then pass "vitest: $(echo "$OUT" | grep -E '^ +Tests' | sed 's/^ *//')"; else fail "vitest" "$(echo "$OUT" | tail -5)"; fi
   if OUT=$(cd frontend/dashboard && npm run build 2>&1); then
     pass "vite build"
     MAIN=$(ls -S frontend/dashboard/dist/assets/index-*.js 2>/dev/null | head -1)
