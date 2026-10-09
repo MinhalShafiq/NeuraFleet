@@ -4,6 +4,7 @@ usage: load_viewers.py WS_BASE SECONDS ROBOT [ROBOT ...]
 e.g.   load_viewers.py ws://localhost:8001/ws/lidar 8 robot-001 robot-001 robot-002
 Prints one JSON line: {"rates": [...], "consecutive": bool, "points": int, "shared_ok": bool}
 """
+
 import json
 import sys
 import threading
@@ -36,8 +37,22 @@ def main():
     for url, _, ids, _ in outs:
         by_robot.setdefault(url, []).append(set(ids))
     # viewers of the same robot must be served the same frames (one producer, fanned out)
-    shared_ok = all(len(a & b) >= min(len(a), len(b)) - 3 for sets in by_robot.values() for a in sets for b in sets)
-    print(json.dumps({"rates": rates, "consecutive": consecutive, "points": outs[0][3], "shared_ok": shared_ok}))
+    shared_ok = all(
+        len(a & b) >= min(len(a), len(b)) - 3
+        for sets in by_robot.values()
+        for a in sets
+        for b in sets
+    )
+    print(
+        json.dumps(
+            {
+                "rates": rates,
+                "consecutive": consecutive,
+                "points": outs[0][3],
+                "shared_ok": shared_ok,
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

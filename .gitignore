@@ -43,4 +43,5 @@ terraform/environments/*.local.tfvars
 .docker/
 .pytest_cache/
 
-OPTIMIZATION_PLAN.md
+plan.md
+.claude/

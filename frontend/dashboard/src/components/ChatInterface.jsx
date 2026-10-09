@@ -1,15 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react'
-import {
-  Send,
-  Bot,
-  User,
-  ChevronDown,
-  Sparkles,
-  BookOpen,
-  FileText,
-} from 'lucide-react'
+import { Send, Bot, User, ChevronDown, Sparkles, BookOpen, FileText } from 'lucide-react'
 import clsx from 'clsx'
 import { queryRAG } from '../services/api'
+import DemoBadge from './DemoBadge'
 
 const SUGGESTED_QUESTIONS = [
   'What are the safety protocols?',
@@ -21,7 +14,7 @@ const SUGGESTED_QUESTIONS = [
 const WELCOME_MESSAGE = {
   role: 'assistant',
   content:
-    'Hello! I\'m the NeuraFleet AI Assistant. I can help you with questions about your robot fleet, maintenance procedures, sensor calibration, safety protocols, and more. You can also scope your questions to a specific robot by selecting one from the dropdown above.\n\nTry one of the suggested questions below, or ask me anything about fleet operations.',
+    "Hello! I'm the NeuraFleet AI Assistant. I can help you with questions about your robot fleet, maintenance procedures, sensor calibration, safety protocols, and more. You can also scope your questions to a specific robot by selecting one from the dropdown above.\n\nTry one of the suggested questions below, or ask me anything about fleet operations.",
   sources: [],
 }
 
@@ -48,20 +41,13 @@ function TypingIndicator() {
 function MessageBubble({ message }) {
   const isUser = message.role === 'user'
   return (
-    <div
-      className={clsx(
-        'flex animate-slide-up',
-        isUser ? 'justify-end' : 'justify-start'
-      )}
-    >
-      <div
-        className={clsx('flex gap-2.5 max-w-[80%]', isUser && 'flex-row-reverse')}
-      >
+    <div className={clsx('flex animate-slide-up', isUser ? 'justify-end' : 'justify-start')}>
+      <div className={clsx('flex gap-2.5 max-w-[80%]', isUser && 'flex-row-reverse')}>
         {/* Avatar */}
         <div
           className={clsx(
             'w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-1',
-            isUser ? 'bg-primary-600' : 'bg-slate-700'
+            isUser ? 'bg-primary-600' : 'bg-slate-700',
           )}
         >
           {isUser ? (
@@ -78,7 +64,7 @@ function MessageBubble({ message }) {
               'rounded-2xl px-4 py-2.5 text-sm leading-relaxed',
               isUser
                 ? 'bg-primary-600 text-white rounded-br-md'
-                : 'bg-slate-700/50 text-slate-200 rounded-bl-md border border-slate-700/50'
+                : 'bg-slate-700/50 text-slate-200 rounded-bl-md border border-slate-700/50',
             )}
           >
             {message.content.split('\n').map((line, i) => (
@@ -87,6 +73,8 @@ function MessageBubble({ message }) {
               </p>
             ))}
           </div>
+
+          {message.demo && <DemoBadge className="mt-2" />}
 
           {/* Sources */}
           {message.sources && message.sources.length > 0 && (
@@ -108,7 +96,7 @@ function MessageBubble({ message }) {
             <p
               className={clsx(
                 'text-[10px] text-slate-600 mt-1',
-                isUser ? 'text-right' : 'text-left'
+                isUser ? 'text-right' : 'text-left',
               )}
             >
               {formatTimestamp(message.timestamp)}
@@ -162,10 +150,11 @@ export default function ChatInterface({ fleet, selectedRobot }) {
         role: 'assistant',
         content: response.response,
         sources: response.sources || [],
+        demo: Boolean(response.demo),
         timestamp: new Date(),
       }
       setMessages((prev) => [...prev, assistantMsg])
-    } catch (err) {
+    } catch {
       setError('Failed to get a response. Please try again.')
       const errMsg = {
         role: 'assistant',
@@ -204,9 +193,7 @@ export default function ChatInterface({ fleet, selectedRobot }) {
             <Sparkles size={16} className="text-primary-400" />
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-white">
-              Fleet AI Assistant
-            </h3>
+            <h3 className="text-sm font-semibold text-white">Fleet AI Assistant</h3>
             <p className="text-[11px] text-slate-500">
               Powered by RAG - Ask about fleet operations
             </p>
@@ -225,7 +212,7 @@ export default function ChatInterface({ fleet, selectedRobot }) {
               size={12}
               className={clsx(
                 'text-slate-400 transition-transform',
-                showRobotDropdown && 'rotate-180'
+                showRobotDropdown && 'rotate-180',
               )}
             />
           </button>
@@ -238,7 +225,7 @@ export default function ChatInterface({ fleet, selectedRobot }) {
                 }}
                 className={clsx(
                   'w-full text-left px-3 py-1.5 text-xs hover:bg-slate-700/50 transition-colors',
-                  !chatRobotId ? 'text-primary-400' : 'text-slate-300'
+                  !chatRobotId ? 'text-primary-400' : 'text-slate-300',
                 )}
               >
                 All Robots
@@ -252,9 +239,7 @@ export default function ChatInterface({ fleet, selectedRobot }) {
                   }}
                   className={clsx(
                     'w-full text-left px-3 py-1.5 text-xs hover:bg-slate-700/50 transition-colors',
-                    chatRobotId === robot.robot_id
-                      ? 'text-primary-400'
-                      : 'text-slate-300'
+                    chatRobotId === robot.robot_id ? 'text-primary-400' : 'text-slate-300',
                   )}
                 >
                   {robot.name}
@@ -339,8 +324,7 @@ export default function ChatInterface({ fleet, selectedRobot }) {
             </button>
           </div>
           <p className="text-[10px] text-slate-600 mt-1.5 px-1">
-            Press Enter to send. AI responses are generated using fleet
-            documentation.
+            Press Enter to send. AI responses are generated using fleet documentation.
           </p>
         </div>
       </div>

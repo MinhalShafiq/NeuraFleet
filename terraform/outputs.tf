@@ -10,11 +10,6 @@ output "cluster_ca_certificate" {
   sensitive   = true
 }
 
-output "storage_bucket_name" {
-  description = "Name of the point cloud storage bucket"
-  value       = module.storage.pointcloud_bucket_name
-}
-
 output "vpc_network_name" {
   description = "VPC network name"
   value       = module.networking.network_name

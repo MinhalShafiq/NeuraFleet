@@ -8,6 +8,9 @@ metadata:
 data:
   ENVIRONMENT: "production"
   LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+  # Browser origins allowed to call the gateway API directly (the dashboard itself uses same-origin /api)
+  CORS_ORIGINS: "https://neurafleet.io"
   GATEWAY_URL: "http://gateway:8000"
   LIDAR_SERVICE_URL: "http://lidar-service:8001"
   TELEMETRY_SERVICE_URL: "http://telemetry-service:8002"

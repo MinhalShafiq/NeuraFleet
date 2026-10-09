@@ -27,7 +27,8 @@ spec:
         fsGroup: 1000
       containers:
         - name: telemetry-service
-          image: gcr.io/PROJECT_ID/neurafleet-telemetry-service:latest
+          image: gcr.io/PROJECT_ID/neurafleet-telemetry-service:0.0.0-unset  # real tag injected by kustomize (see k8s/kustomization.yaml)
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8002
               protocol: TCP

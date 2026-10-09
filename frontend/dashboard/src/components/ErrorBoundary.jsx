@@ -27,7 +27,9 @@ export default class ErrorBoundary extends React.Component {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center p-8">
         <h3 className="text-lg font-semibold text-slate-300 mb-1">This view failed to load</h3>
-        <p className="text-sm text-slate-500 mb-4">{String(this.state.error?.message || this.state.error)}</p>
+        <p className="text-sm text-slate-500 mb-4">
+          {String(this.state.error?.message || this.state.error)}
+        </p>
         <button
           className="text-xs px-3 py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800"
           onClick={() => this.setState({ error: null })}

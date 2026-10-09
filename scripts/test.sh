@@ -5,16 +5,17 @@
 #   scripts/test.sh --up         ...and (re)build + start the Docker stack first
 #   scripts/test.sh --unit       only the pytest suite (fast, no Docker/Node needed)
 #   scripts/test.sh --no-restart skip restarting rag-service (persistence check)
+#   scripts/test.sh --no-chaos   skip stopping telemetry-service (demo-data fallback + recovery check)
 #   scripts/test.sh --no-load    skip the 3-viewer streaming load test
 #
 # Exit code is non-zero if any check fails.
 set -u
 cd "$(dirname "$0")/.."
 
-UP=0 UNIT_ONLY=0 RESTART=1 LOAD=1
+UP=0 UNIT_ONLY=0 RESTART=1 LOAD=1 CHAOS=1
 for a in "$@"; do
   case "$a" in
-    --up) UP=1 ;; --unit) UNIT_ONLY=1 ;; --no-restart) RESTART=0 ;; --no-load) LOAD=0 ;;
+    --up) UP=1 ;; --unit) UNIT_ONLY=1 ;; --no-restart) RESTART=0 ;; --no-load) LOAD=0 ;; --no-chaos) CHAOS=0 ;;
     -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
     *) echo "unknown option: $a"; exit 2 ;;
   esac
@@ -46,6 +47,15 @@ else
   fail "pytest not installed" "run: uv venv --python 3.11 .venv && uv pip install --python .venv/bin/python -r backend/{gateway,lidar_service,telemetry_service,rag_service}/requirements.txt -r tests/requirements.txt"
 fi
 
+section "Lint, types, frontend tests"
+if "$PY" -m ruff --version >/dev/null 2>&1; then
+  "$PY" -m ruff check backend tests scripts >/dev/null 2>&1 && pass "ruff check" || fail "ruff check" "run: .venv/bin/ruff check backend tests scripts"
+  "$PY" -m ruff format --check backend tests scripts >/dev/null 2>&1 && pass "ruff format --check" || fail "ruff format --check" "run: .venv/bin/ruff format backend tests scripts"
+else skip "ruff" "not installed in $PY"; fi
+if "$PY" -m mypy --version >/dev/null 2>&1; then
+  "$PY" -m mypy backend --explicit-package-bases >/dev/null 2>&1 && pass "mypy" || fail "mypy" "run: .venv/bin/mypy backend --explicit-package-bases"
+else skip "mypy" "not installed in $PY"; fi
+
 summary() {
   echo; echo "${B}== Summary${N}: ${G}$PASS passed${N}, $([ $FAIL -gt 0 ] && echo "$R")$FAIL failed$N, $SKIP skipped"
   [ $FAIL -eq 0 ]; exit $?
@@ -74,16 +84,38 @@ HEALTH=$(curl -s --max-time 10 localhost:8000/api/health 2>/dev/null)
 if [ -z "$HEALTH" ]; then skip "stack checks" "stack is not running - start it with: scripts/test.sh --up"; summary; fi
 
 check "gateway /health (k8s probe path)  [0.1]" 200 "$(code localhost:8000/health)"
-check "/api/health: all 3 services healthy, no mock fallback" \
-  '{"status":"ok","services":{"telemetry":"healthy","lidar":"healthy","rag":"healthy"}}' "$HEALTH"
+check "/api/health: all 3 services healthy and LIVE (no mock fallback)" \
+  '{"status":"ok","services":{"telemetry":"healthy","lidar":"healthy","rag":"healthy"},"mode":{"telemetry":"live","lidar":"live","rag":"live"}}' "$HEALTH"
+# HEALTHCHECK needs its start-period + one interval before reporting healthy: poll, don't sample once.
+UNHEALTHY=
+for i in $(seq 1 45); do
+  UNHEALTHY=$(for c in neurafleet-gateway neurafleet-telemetry neurafleet-lidar neurafleet-rag neurafleet-frontend; do
+    st=$(docker inspect -f '{{.State.Health.Status}}' $c 2>/dev/null || sg docker -c "docker inspect -f '{{.State.Health.Status}}' $c" 2>/dev/null)
+    [ "$st" = healthy ] || echo "$c=$st"; done)
+  [ -z "$UNHEALTHY" ] && break; sleep 2
+done
+[ -z "$UNHEALTHY" ] && pass "all 5 containers report HEALTHCHECK healthy" || fail "container healthchecks" "$UNHEALTHY"
+
+section "Observability  [4.5]"
+RID=$(curl -s -D - -o /dev/null -H 'X-Request-ID: test-trace-1' localhost:8000/health | tr -d '\r' | awk -F': ' 'tolower($1)=="x-request-id"{print $2}')
+check "request id is echoed on responses" test-trace-1 "$RID"
+for spec in gateway:8000 telemetry:8002 lidar:8001 rag:8003; do
+  n=${spec%%:*}; port=${spec##*:}
+  curl -s localhost:$port/metrics | grep -q '^http_requests_total' && pass "$n /metrics serves Prometheus text" || fail "$n /metrics"
+done
+echo "$(dc logs gateway | tail -50)" | grep -q '"request_id"' && pass "gateway logs are structured JSON with request_id" || fail "gateway logs not JSON"
+LIVE_DEMO=$(curl -s localhost:8000/api/fleet | "$PY" -c "import sys,json;print(any(r['demo'] for r in json.load(sys.stdin)))")
+check "live fleet data is not flagged demo" False "$LIVE_DEMO"
 check "unknown robot via gateway -> 404  [2.3]" 404 "$(code localhost:8000/api/fleet/robot-999)"
 check "unknown robot on telemetry metrics -> 404  [2.3]" 404 "$(code localhost:8002/metrics/nope)"
 check "known robot -> 200" 200 "$(code localhost:8000/api/fleet/robot-001)"
 check "frontend serves on :3000" 200 "$(code localhost:3000/)"
 
 section "Single worker / replica  [0.2]"
-check "telemetry simulation loop started once" 1 "$(dc logs telemetry-service | grep -c 'Simulation loop started')"
-check "lidar server processes started" 1 "$(dc logs lidar-service | grep -c 'Started server process')"
+# Count only the current container run (earlier runs of this script restart services on purpose).
+since() { docker inspect -f '{{.State.StartedAt}}' "$1" 2>/dev/null || sg docker -c "docker inspect -f '{{.State.StartedAt}}' $1"; }
+check "telemetry simulation loop started once" 1 "$(dc logs --since "$(since neurafleet-telemetry)" telemetry-service | grep -c 'Simulation loop started')"
+check "lidar server processes started" 1 "$(dc logs --since "$(since neurafleet-lidar)" lidar-service | grep -c 'Started server process')"
 
 section "Stateful alerts  [0.5]"
 A1=$(curl -s localhost:8002/alerts); sleep 6; A2=$(curl -s localhost:8002/alerts)
@@ -121,9 +153,9 @@ section "LiDAR streaming  [1.1]"
 if [ $LOAD -eq 1 ] && "$PY" -c "import websockets" 2>/dev/null; then
   ( for i in $(seq 1 300); do curl -s -o /dev/null -w '%{time_total}\n' --max-time 5 localhost:8001/health; sleep 0.02; done > /tmp/nf_health_lat.txt ) &
   LP=$!
-  R=$("$PY" scripts/load_viewers.py ws://localhost:8001/ws/lidar 8 robot-001 robot-001 robot-002 2>&1 | tail -1)
+  LOADRES=$("$PY" scripts/load_viewers.py ws://localhost:8001/ws/lidar 8 robot-001 robot-001 robot-002 2>&1 | tail -1)
   wait $LP
-  eval "$("$PY" - "$R" <<'PYEOF'
+  eval "$("$PY" - "$LOADRES" <<'PYEOF'
 import json, sys
 try: r = json.loads(sys.argv[1])
 except Exception: print('OK_RATE=0 CONSEC=0 SHARED=0 PTS=0 RATES="unparseable"'); sys.exit()
@@ -141,5 +173,36 @@ PYEOF
   [ "$P99" -lt 100 ] && pass "lidar /health stays responsive while streaming: p99=${P99} ms, max=${MAX} ms" || fail "lidar /health p99=${P99} ms while streaming" "event loop is stalling"
   [ "$MAX" -ge 50 ] && echo "       note: max ${MAX} ms - occasional ~50 ms gen-2 GC pause (known, see Phase 2 notes)"
 else skip "streaming load test" "--no-load or 'websockets' not installed in $PY"; fi
+
+section "Demo-data fallback and recovery  [4.6, 2.7]"
+if [ $CHAOS -eq 1 ]; then
+  dc stop telemetry-service >/dev/null; sleep 3
+  DEMO=$(curl -s localhost:8000/api/fleet | "$PY" -c "import sys,json;d=json.load(sys.stdin);print(all(r['demo'] for r in d) and len(d))")
+  [ "$DEMO" = 6 ] && pass "telemetry down -> gateway serves 6 robots, all flagged demo" || fail "fallback not flagged demo" "$DEMO"
+  check "/api/health reports telemetry as mock" mock "$(curl -s localhost:8000/api/health | "$PY" -c "import sys,json;print(json.load(sys.stdin)['mode']['telemetry'])")"
+  WSDEMO=$("$PY" - <<'PYEOF'
+import json
+from websockets.sync.client import connect
+with connect("ws://localhost:8000/api/ws/telemetry", open_timeout=5) as ws:
+    print(all(r.get("demo") for r in json.loads(ws.recv(timeout=5))))
+PYEOF
+)
+  check "WebSocket telemetry is also flagged demo while down" True "$WSDEMO"
+  dc start telemetry-service >/dev/null
+  RECOVERED=no; for i in $(seq 1 40); do
+    D=$(curl -s localhost:8000/api/fleet | "$PY" -c "import sys,json;print(any(r['demo'] for r in json.load(sys.stdin)))" 2>/dev/null)
+    [ "$D" = False ] && { RECOVERED=yes; break; }; sleep 2; done
+  check "recovers to live data after telemetry restarts" yes "$RECOVERED"
+  WSLIVE=$("$PY" - <<'PYEOF'
+import json, time
+from websockets.sync.client import connect
+# a long-lived gateway stream opened now must serve live frames (upstream is back)
+with connect("ws://localhost:8000/api/ws/telemetry", open_timeout=5) as ws:
+    frames = [json.loads(ws.recv(timeout=5)) for _ in range(3)]
+print(not any(r.get("demo") for f in frames for r in f))
+PYEOF
+)
+  check "WebSocket telemetry is live again" True "$WSLIVE"
+else skip "demo-data fallback" "--no-chaos"; fi
 
 summary

@@ -1,0 +1,43 @@
+# Deploy with:  kubectl apply -k k8s/
+#
+# Images are referenced by an immutable tag, never :latest, so a rollout is reproducible and
+# `kubectl rollout undo` goes back to what actually ran.  The manifests carry a placeholder tag
+# (0.0.0-unset) that does not exist: applying without setting real tags fails loudly with
+# ImagePullBackOff instead of silently running whatever :latest happens to be.
+#
+# In CI, after pushing images tagged with the git SHA:
+#   cd k8s
+#   for s in gateway telemetry-service lidar-service rag-service frontend; do
+#     kustomize edit set image gcr.io/PROJECT_ID/neurafleet-$s=gcr.io/<your-project>/neurafleet-$s:$GIT_SHA
+#   done
+#   kubectl apply -k .
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - backendconfig.yaml
+  - gateway/deployment.yaml
+  - gateway/service.yaml
+  - telemetry-service/deployment.yaml
+  - telemetry-service/service.yaml
+  - lidar-service/deployment.yaml
+  - lidar-service/service.yaml
+  - rag-service/deployment.yaml
+  - rag-service/service.yaml
+  - frontend/deployment.yaml
+  - frontend/service.yaml
+  - ingress.yaml
+
+images:
+  - name: gcr.io/PROJECT_ID/neurafleet-gateway
+    newTag: 0.0.0-unset
+  - name: gcr.io/PROJECT_ID/neurafleet-telemetry-service
+    newTag: 0.0.0-unset
+  - name: gcr.io/PROJECT_ID/neurafleet-lidar-service
+    newTag: 0.0.0-unset
+  - name: gcr.io/PROJECT_ID/neurafleet-rag-service
+    newTag: 0.0.0-unset
+  - name: gcr.io/PROJECT_ID/neurafleet-frontend
+    newTag: 0.0.0-unset

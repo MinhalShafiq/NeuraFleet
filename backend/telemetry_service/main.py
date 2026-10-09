@@ -10,21 +10,18 @@ alerts, and metrics history.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-
 from robot_simulator import FleetSimulator
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+from shared.models import Alert, ErrorDetail, MetricsHistory, RobotState, TelemetryHealth
+from shared.observability import install_observability
+
 logger = logging.getLogger("telemetry_service")
 
 # ---------------------------------------------------------------------------
@@ -42,7 +39,8 @@ async def _simulation_loop() -> None:
     logger.info("Simulation loop started (dt=%.2f s)", dt)
     while True:
         try:
-            fleet_sim.update(dt)
+            with tick_seconds.time():
+                fleet_sim.update(dt)
         except Exception:
             logger.exception("Simulation tick error")
         await asyncio.sleep(dt)
@@ -52,22 +50,19 @@ async def _simulation_loop() -> None:
 # Lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global fleet_sim, _sim_task
     fleet_sim = FleetSimulator()
-    logger.info(
-        "Fleet simulator initialised with %d robots", len(fleet_sim.robots)
-    )
+    logger.info("Fleet simulator initialised with %d robots", len(fleet_sim.robots))
     _sim_task = asyncio.create_task(_simulation_loop())
     yield
     # Shutdown
     if _sim_task:
         _sim_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await _sim_task
-        except asyncio.CancelledError:
-            pass
     logger.info("Telemetry Service shut down")
 
 
@@ -80,9 +75,22 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+obs = install_observability(app, "telemetry")
+tick_seconds = obs.histogram(
+    "telemetry_sim_tick_seconds",
+    "Time to advance the fleet simulation one tick",
+    (0.001, 0.005, 0.01, 0.025, 0.05, 0.1),
+)
+active_alerts = obs.gauge("telemetry_active_alerts", "Alerts currently raised")
+active_alerts.set_function(lambda: len(fleet_sim.get_alerts()) if fleet_sim else 0)
+
+_NOT_FOUND: dict[int | str, dict[str, Any]] = {
+    404: {"model": ErrorDetail},
+    503: {"model": ErrorDetail},
+}
 
 
-@app.get("/health")
+@app.get("/health", response_model=TelemetryHealth)
 async def health():
     if fleet_sim is None:
         return {"status": "starting"}
@@ -97,7 +105,8 @@ async def health():
 # REST: Fleet state
 # ---------------------------------------------------------------------------
 
-@app.get("/fleet")
+
+@app.get("/fleet", response_model=list[RobotState])
 async def get_fleet():
     """Return full state for all robots."""
     if fleet_sim is None:
@@ -105,7 +114,7 @@ async def get_fleet():
     return fleet_sim.get_all_robots()
 
 
-@app.get("/fleet/{robot_id}")
+@app.get("/fleet/{robot_id}", response_model=RobotState, responses=_NOT_FOUND)
 async def get_robot(robot_id: str):
     """Return state for a single robot."""
     if fleet_sim is None:
@@ -120,7 +129,8 @@ async def get_robot(robot_id: str):
 # REST: Alerts
 # ---------------------------------------------------------------------------
 
-@app.get("/alerts")
+
+@app.get("/alerts", response_model=list[Alert])
 async def get_alerts():
     """Return active alerts."""
     if fleet_sim is None:
@@ -128,7 +138,7 @@ async def get_alerts():
     return fleet_sim.get_alerts()
 
 
-@app.get("/alerts/resolved")
+@app.get("/alerts/resolved", response_model=list[Alert])
 async def get_resolved_alerts():
     """Return recently cleared alerts (bounded history)."""
     if fleet_sim is None:
@@ -140,7 +150,8 @@ async def get_resolved_alerts():
 # REST: Metrics history
 # ---------------------------------------------------------------------------
 
-@app.get("/metrics/{robot_id}")
+
+@app.get("/metrics/{robot_id}", response_model=MetricsHistory, responses=_NOT_FOUND)
 async def get_metrics(robot_id: str):
     """Return up to 100 historical metric points for a robot."""
     if fleet_sim is None:
@@ -154,6 +165,7 @@ async def get_metrics(robot_id: str):
 # ---------------------------------------------------------------------------
 # WebSocket: Telemetry stream (~2 Hz)
 # ---------------------------------------------------------------------------
+
 
 @app.websocket("/ws/telemetry")
 async def ws_telemetry(ws: WebSocket):

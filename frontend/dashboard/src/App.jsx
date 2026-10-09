@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import FleetMonitor from './components/FleetMonitor'
 import ErrorBoundary from './components/ErrorBoundary'
 import { createTelemetrySocket, fetchFleet, fetchAlerts } from './services/api'
+import { connectWithBackoff } from './services/reconnect'
 
 // three.js + react-three-fiber + drei are the bulk of the bundle and only the LiDAR
 // view needs them; the dashboard (default view) shouldn't pay for them on first paint.
@@ -42,74 +43,41 @@ export default function App() {
   const historyRef = useRef({})
   const historyTimerRef = useRef(null)
 
-  const wsRef = useRef(null)
-  const reconnectTimerRef = useRef(null)
   const alertIntervalRef = useRef(null)
 
-  const connectWebSocket = useCallback(() => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return
-
+  const handleTelemetry = useCallback((event) => {
     try {
-      const ws = createTelemetrySocket()
-
-      ws.onopen = () => {
-        setConnected(true)
-        if (reconnectTimerRef.current) {
-          clearTimeout(reconnectTimerRef.current)
-          reconnectTimerRef.current = null
-        }
+      const data = JSON.parse(event.data)
+      if (!Array.isArray(data)) return
+      // WS frames omit name/robot_type (keep them from the REST snapshot) and omit `demo`
+      // when live, so it must be reset explicitly or a stale "demo" would outlive recovery.
+      setFleet((prev) => {
+        const byId = new Map(prev.map((r) => [r.robot_id, r]))
+        return data.map((r) => ({ ...byId.get(r.robot_id), ...r, demo: Boolean(r.demo) }))
+      })
+      const now = Date.now()
+      const hist = historyRef.current
+      for (const robot of data) {
+        const list = hist[robot.robot_id] || (hist[robot.robot_id] = [])
+        list.push({
+          time: now,
+          battery: robot.battery,
+          temperature: robot.temperature,
+          cpu_usage: robot.cpu_usage,
+          memory_usage: robot.memory_usage,
+        })
+        if (list.length > HISTORY_LEN) list.shift()
       }
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data)
-          if (Array.isArray(data)) {
-            // WS frames omit name/robot_type; keep them from the REST snapshot.
-            setFleet((prev) => {
-              const byId = new Map(prev.map((r) => [r.robot_id, r]))
-              return data.map((r) => ({ ...byId.get(r.robot_id), ...r }))
-            })
-            const now = Date.now()
-            const hist = historyRef.current
-            for (const robot of data) {
-              const list = hist[robot.robot_id] || (hist[robot.robot_id] = [])
-              list.push({
-                time: now,
-                battery: robot.battery,
-                temperature: robot.temperature,
-                cpu_usage: robot.cpu_usage,
-                memory_usage: robot.memory_usage,
-              })
-              if (list.length > HISTORY_LEN) list.shift()
-            }
-            if (!historyTimerRef.current) {
-              historyTimerRef.current = setTimeout(() => {
-                historyTimerRef.current = null
-                const snapshot = {}
-                for (const [id, list] of Object.entries(historyRef.current)) snapshot[id] = list.slice()
-                setTelemetryHistory(snapshot)
-              }, HISTORY_COMMIT_MS)
-            }
-          }
-        } catch (err) {
-          console.error('Failed to parse telemetry:', err)
-        }
+      if (!historyTimerRef.current) {
+        historyTimerRef.current = setTimeout(() => {
+          historyTimerRef.current = null
+          const snapshot = {}
+          for (const [id, list] of Object.entries(historyRef.current)) snapshot[id] = list.slice()
+          setTelemetryHistory(snapshot)
+        }, HISTORY_COMMIT_MS)
       }
-
-      ws.onclose = () => {
-        setConnected(false)
-        wsRef.current = null
-        reconnectTimerRef.current = setTimeout(connectWebSocket, 3000)
-      }
-
-      ws.onerror = () => {
-        ws.close()
-      }
-
-      wsRef.current = ws
     } catch (err) {
-      console.error('WebSocket connection failed:', err)
-      reconnectTimerRef.current = setTimeout(connectWebSocket, 3000)
+      console.error('Failed to parse telemetry:', err)
     }
   }, [])
 
@@ -119,22 +87,20 @@ export default function App() {
       .then(setFleet)
       .catch((err) => console.error('Initial fleet fetch failed:', err))
 
-    connectWebSocket()
+    const connection = connectWithBackoff(createTelemetrySocket, {
+      onOpen: () => setConnected(true),
+      onClose: () => setConnected(false),
+      onMessage: handleTelemetry,
+    })
 
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
-      }
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current)
-      }
+      connection.close()
       if (historyTimerRef.current) {
         clearTimeout(historyTimerRef.current)
         historyTimerRef.current = null
       }
     }
-  }, [connectWebSocket])
+  }, [handleTelemetry])
 
   // Fetch alerts periodically
   useEffect(() => {
@@ -165,12 +131,7 @@ export default function App() {
           />
         )
       case 'chat':
-        return (
-          <ChatInterface
-            fleet={fleet}
-            selectedRobot={selectedRobot}
-          />
-        )
+        return <ChatInterface fleet={fleet} selectedRobot={selectedRobot} />
       case 'dashboard':
       default:
         return (

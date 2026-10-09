@@ -52,12 +52,7 @@ function DataRow({ label, value, unit = '', mono = true }) {
   return (
     <div className="flex items-center justify-between py-0.5">
       <span className="text-[11px] text-slate-500">{label}</span>
-      <span
-        className={clsx(
-          'text-xs text-slate-300',
-          mono && 'font-mono'
-        )}
-      >
+      <span className={clsx('text-xs text-slate-300', mono && 'font-mono')}>
         {typeof value === 'number' ? value.toFixed(3) : value}
         {unit && <span className="text-slate-500 ml-0.5">{unit}</span>}
       </span>
@@ -83,9 +78,7 @@ function TelemetryPanel({ robot }) {
   if (!robot) {
     return (
       <div className="glass-panel p-4">
-        <p className="text-sm text-slate-500 text-center py-4">
-          Select a robot to view telemetry
-        </p>
+        <p className="text-sm text-slate-500 text-center py-4">Select a robot to view telemetry</p>
       </div>
     )
   }
@@ -96,9 +89,7 @@ function TelemetryPanel({ robot }) {
     <div className="glass-panel p-4 space-y-4 animate-fade-in">
       <div className="flex items-center gap-2 pb-2 border-b border-slate-700/50">
         <Gauge size={14} className="text-primary-400" />
-        <h3 className="text-sm font-semibold text-slate-300">
-          Live Telemetry
-        </h3>
+        <h3 className="text-sm font-semibold text-slate-300">Live Telemetry</h3>
         <span className="text-[10px] bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-1.5 py-0.5 rounded-full font-medium ml-auto">
           LIVE
         </span>
@@ -139,21 +130,13 @@ function TelemetryPanel({ robot }) {
             <p className="text-[10px] text-slate-500 mb-1">Accelerometer (m/s2)</p>
             <div className="grid grid-cols-3 gap-2">
               {['ax', 'ay', 'az'].map((k) => (
-                <DataRow
-                  key={k}
-                  label={k.toUpperCase()}
-                  value={sensors.imu[k]}
-                />
+                <DataRow key={k} label={k.toUpperCase()} value={sensors.imu[k]} />
               ))}
             </div>
             <p className="text-[10px] text-slate-500 mt-1.5 mb-1">Gyroscope (rad/s)</p>
             <div className="grid grid-cols-3 gap-2">
               {['gx', 'gy', 'gz'].map((k) => (
-                <DataRow
-                  key={k}
-                  label={k.toUpperCase()}
-                  value={sensors.imu[k]}
-                />
+                <DataRow key={k} label={k.toUpperCase()} value={sensors.imu[k]} />
               ))}
             </div>
           </div>
@@ -206,7 +189,7 @@ function TelemetryPanel({ robot }) {
               ? robot.last_update > 1e12
                 ? robot.last_update
                 : robot.last_update * 1000
-              : robot.last_update
+              : robot.last_update,
           ).toLocaleTimeString()}
         </div>
       )}

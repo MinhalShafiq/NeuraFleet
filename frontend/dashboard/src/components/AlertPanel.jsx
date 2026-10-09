@@ -1,11 +1,5 @@
 import React, { memo, useMemo } from 'react'
-import {
-  AlertTriangle,
-  AlertCircle,
-  Info,
-  CheckCircle,
-  Shield,
-} from 'lucide-react'
+import { AlertTriangle, AlertCircle, Info, CheckCircle, Shield } from 'lucide-react'
 import clsx from 'clsx'
 
 const SEVERITY_CONFIG = {
@@ -35,9 +29,12 @@ const SEVERITY_CONFIG = {
 function timeAgo(timestamp) {
   if (!timestamp) return ''
   const now = Date.now()
-  const ts = typeof timestamp === 'number'
-    ? (timestamp > 1e12 ? timestamp : timestamp * 1000)
-    : new Date(timestamp).getTime()
+  const ts =
+    typeof timestamp === 'number'
+      ? timestamp > 1e12
+        ? timestamp
+        : timestamp * 1000
+      : new Date(timestamp).getTime()
   const diff = Math.max(0, now - ts)
   const seconds = Math.floor(diff / 1000)
 
@@ -60,7 +57,7 @@ const AlertItem = memo(function AlertItem({ alert, robotName }) {
       className={clsx(
         'flex gap-3 p-3 rounded-lg border transition-all duration-300 animate-slide-up',
         config.bg,
-        config.border
+        config.border,
       )}
     >
       <div className={clsx('mt-0.5 shrink-0', config.color)}>
@@ -82,7 +79,7 @@ const AlertItem = memo(function AlertItem({ alert, robotName }) {
               'text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border',
               config.bg,
               config.border,
-              config.color
+              config.color,
             )}
           >
             {alert.severity}
@@ -101,15 +98,25 @@ const AlertItem = memo(function AlertItem({ alert, robotName }) {
 // Takes a stable id->name map instead of the fleet array: the fleet changes at 2 Hz,
 // alerts only every few seconds, so this panel should not re-render with telemetry.
 function AlertPanel({ alerts, robotNames }) {
-  const sortedAlerts = useMemo(() => [...(alerts || [])].sort((a, b) => {
-    const tsA = typeof a.timestamp === 'number'
-      ? (a.timestamp > 1e12 ? a.timestamp : a.timestamp * 1000)
-      : new Date(a.timestamp).getTime()
-    const tsB = typeof b.timestamp === 'number'
-      ? (b.timestamp > 1e12 ? b.timestamp : b.timestamp * 1000)
-      : new Date(b.timestamp).getTime()
-    return tsB - tsA
-  }), [alerts])
+  const sortedAlerts = useMemo(
+    () =>
+      [...(alerts || [])].sort((a, b) => {
+        const tsA =
+          typeof a.timestamp === 'number'
+            ? a.timestamp > 1e12
+              ? a.timestamp
+              : a.timestamp * 1000
+            : new Date(a.timestamp).getTime()
+        const tsB =
+          typeof b.timestamp === 'number'
+            ? b.timestamp > 1e12
+              ? b.timestamp
+              : b.timestamp * 1000
+            : new Date(b.timestamp).getTime()
+        return tsB - tsA
+      }),
+    [alerts],
+  )
 
   return (
     <div className="glass-panel p-4">
@@ -130,9 +137,7 @@ function AlertPanel({ alerts, robotNames }) {
           <div className="flex flex-col items-center justify-center py-8 text-center">
             <CheckCircle size={24} className="text-green-500/50 mb-2" />
             <p className="text-sm text-slate-500">No active alerts</p>
-            <p className="text-xs text-slate-600 mt-0.5">
-              All systems operating normally
-            </p>
+            <p className="text-xs text-slate-600 mt-0.5">All systems operating normally</p>
           </div>
         ) : (
           sortedAlerts.map((alert) => (

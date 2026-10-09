@@ -27,7 +27,8 @@ spec:
         fsGroup: 1000
       containers:
         - name: lidar-service
-          image: gcr.io/PROJECT_ID/neurafleet-lidar-service:latest
+          image: gcr.io/PROJECT_ID/neurafleet-lidar-service:0.0.0-unset  # real tag injected by kustomize (see k8s/kustomization.yaml)
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8001
               protocol: TCP

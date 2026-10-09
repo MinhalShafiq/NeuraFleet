@@ -1,10 +1,10 @@
 """Kubernetes probes must hit routes the service actually serves (plan 0.1),
 and stateful services must not be scaled out (plan 0.2)."""
+
 import re
 
 import pytest
 import yaml
-
 from conftest import ROOT, SERVICE_DIRS, load_module
 
 STATEFUL = ["telemetry-service", "lidar-service"]

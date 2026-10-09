@@ -11,22 +11,24 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import Any
 
-from fastapi.concurrency import run_in_threadpool
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-
+from fastapi.concurrency import run_in_threadpool
 from llm_client import LLMClient
 from vector_store import VectorStore
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+from shared.models import (
+    DocumentOut,
+    ErrorDetail,
+    IngestRequest,
+    IngestResponse,
+    RagHealth,
+    RAGQuery,
+    RAGResponse,
 )
+from shared.observability import install_observability
+
 logger = logging.getLogger("rag_service")
 
 # ---------------------------------------------------------------------------
@@ -40,6 +42,7 @@ llm_client: LLMClient | None = None
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -64,9 +67,14 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+obs = install_observability(app, "rag")
+documents_gauge = obs.gauge("rag_documents", "Chunks in the vector store")
+documents_gauge.set_function(lambda: vector_store._collection.count() if vector_store else 0)
+
+_NOT_READY: dict[int | str, dict[str, Any]] = {503: {"model": ErrorDetail}}
 
 
-@app.get("/health")
+@app.get("/health", response_model=RagHealth)
 async def health():
     doc_count = await run_in_threadpool(vector_store._collection.count) if vector_store else 0
     return {
@@ -80,31 +88,14 @@ async def health():
 # Request / Response models
 # ---------------------------------------------------------------------------
 
-class QueryRequest(BaseModel):
-    query: str
-    robot_id: Optional[str] = None
-
-
-class QueryResponse(BaseModel):
-    response: str
-    sources: List[str]
-    query: str
-
-
-class IngestRequest(BaseModel):
-    documents: List[dict]
-
-
-class IngestResponse(BaseModel):
-    added: int
-
 
 # ---------------------------------------------------------------------------
 # POST /query
 # ---------------------------------------------------------------------------
 
-@app.post("/query", response_model=QueryResponse)
-async def query_rag(req: QueryRequest):
+
+@app.post("/query", response_model=RAGResponse, responses=_NOT_READY)
+async def query_rag(req: RAGQuery):
     """
     Query the RAG system.
 
@@ -129,7 +120,7 @@ async def query_rag(req: QueryRequest):
     )
 
     context_texts = [r["text"] for r in results]
-    sources = list({r["metadata"].get("source", "unknown") for r in results})
+    sources = sorted({(r["metadata"] or {}).get("source", "unknown") for r in results})
 
     # Generate response
     response_text = await llm_client.generate_response(
@@ -138,7 +129,7 @@ async def query_rag(req: QueryRequest):
         robot_id=req.robot_id,
     )
 
-    return QueryResponse(
+    return RAGResponse(
         response=response_text,
         sources=sources,
         query=req.query,
@@ -149,7 +140,8 @@ async def query_rag(req: QueryRequest):
 # GET /documents
 # ---------------------------------------------------------------------------
 
-@app.get("/documents")
+
+@app.get("/documents", response_model=list[DocumentOut])
 async def list_documents():
     """List all documents in the vector store."""
     if vector_store is None:
@@ -161,7 +153,8 @@ async def list_documents():
 # POST /ingest
 # ---------------------------------------------------------------------------
 
-@app.post("/ingest", response_model=IngestResponse)
+
+@app.post("/ingest", response_model=IngestResponse, responses=_NOT_READY)
 async def ingest_documents(req: IngestRequest):
     """
     Add new documents to the vector store.
@@ -172,7 +165,9 @@ async def ingest_documents(req: IngestRequest):
     if vector_store is None:
         raise HTTPException(status_code=503, detail="Service not ready")
 
-    added = await run_in_threadpool(vector_store.add_documents, req.documents)
+    added = await run_in_threadpool(
+        vector_store.add_documents, [d.model_dump() for d in req.documents]
+    )
     return IngestResponse(added=added)
 
 

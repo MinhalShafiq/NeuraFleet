@@ -10,8 +10,6 @@ import {
   MapPin,
 } from 'lucide-react'
 import {
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -37,20 +35,11 @@ const StatCard = memo(function StatCard({ icon: Icon, label, value, sub, color }
     <div className="stat-card">
       <div className="flex items-start justify-between">
         <div>
-          <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">
-            {label}
-          </p>
-          <p className={clsx('text-2xl font-bold mt-1', color || 'text-white')}>
-            {value}
-          </p>
+          <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">{label}</p>
+          <p className={clsx('text-2xl font-bold mt-1', color || 'text-white')}>{value}</p>
           {sub && <p className="text-xs text-slate-500 mt-0.5">{sub}</p>}
         </div>
-        <div
-          className={clsx(
-            'p-2.5 rounded-lg',
-            color ? 'bg-slate-800/80' : 'bg-slate-700/50'
-          )}
-        >
+        <div className={clsx('p-2.5 rounded-lg', color ? 'bg-slate-800/80' : 'bg-slate-700/50')}>
           <Icon size={20} className={color || 'text-slate-400'} />
         </div>
       </div>
@@ -59,12 +48,7 @@ const StatCard = memo(function StatCard({ icon: Icon, label, value, sub, color }
 })
 
 function BatteryBar({ value }) {
-  const color =
-    value > 50
-      ? 'bg-green-500'
-      : value > 20
-        ? 'bg-amber-500'
-        : 'bg-red-500'
+  const color = value > 50 ? 'bg-green-500' : value > 20 ? 'bg-amber-500' : 'bg-red-500'
   return (
     <div className="w-full bg-slate-700/50 rounded-full h-1.5">
       <div
@@ -95,7 +79,7 @@ const RobotCard = memo(function RobotCard({ robot, isSelected, onSelect }) {
         'glass-panel p-4 cursor-pointer transition-all duration-200 animate-fade-in',
         isSelected
           ? 'border-primary-500/40 bg-primary-600/5 ring-1 ring-primary-500/20'
-          : 'hover:border-slate-600/50 hover:bg-slate-800/70'
+          : 'hover:border-slate-600/50 hover:bg-slate-800/70',
       )}
     >
       {/* Header */}
@@ -108,20 +92,18 @@ const RobotCard = memo(function RobotCard({ robot, isSelected, onSelect }) {
                 ? 'text-cyan-400'
                 : robot.status === 'error'
                   ? 'text-red-400'
-                  : 'text-slate-400'
+                  : 'text-slate-400',
             )}
           />
           <div className="min-w-0">
-            <h4 className="text-sm font-semibold text-white truncate">
-              {robot.name}
-            </h4>
+            <h4 className="text-sm font-semibold text-white truncate">{robot.name}</h4>
             <p className="text-[10px] text-slate-500 uppercase">{robot.robot_type}</p>
           </div>
         </div>
         <span
           className={clsx(
             'text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full border',
-            STATUS_STYLES[robot.status]
+            STATUS_STYLES[robot.status],
           )}
         >
           {robot.status}
@@ -141,7 +123,7 @@ const RobotCard = memo(function RobotCard({ robot, isSelected, onSelect }) {
                 ? 'text-green-400'
                 : robot.battery > 20
                   ? 'text-amber-400'
-                  : 'text-red-400'
+                  : 'text-red-400',
             )}
           >
             {robot.battery?.toFixed(1)}%
@@ -171,7 +153,7 @@ const RobotCard = memo(function RobotCard({ robot, isSelected, onSelect }) {
               ? 'text-red-400'
               : robot.temperature > 60
                 ? 'text-amber-400'
-                : 'text-green-400'
+                : 'text-green-400',
           )}
         >
           {robot.temperature?.toFixed(1)}C
@@ -257,18 +239,14 @@ const TelemetryCharts = memo(function TelemetryCharts({ robotId, telemetryHistor
   if (data.length === 0) {
     return (
       <div className="glass-panel p-6 flex items-center justify-center h-64">
-        <p className="text-sm text-slate-500">
-          Select a robot to view telemetry charts
-        </p>
+        <p className="text-sm text-slate-500">Select a robot to view telemetry charts</p>
       </div>
     )
   }
 
   return (
     <div className="glass-panel p-4">
-      <h3 className="text-sm font-semibold text-slate-300 mb-3">
-        Telemetry History
-      </h3>
+      <h3 className="text-sm font-semibold text-slate-300 mb-3">Telemetry History</h3>
       <div className="h-56">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chartData}>
@@ -287,12 +265,7 @@ const TelemetryCharts = memo(function TelemetryCharts({ robotId, telemetryHistor
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis
-              dataKey="idx"
-              tick={false}
-              axisLine={{ stroke: '#475569' }}
-              tickLine={false}
-            />
+            <XAxis dataKey="idx" tick={false} axisLine={{ stroke: '#475569' }} tickLine={false} />
             <YAxis
               tick={{ fontSize: 10, fill: '#94a3b8' }}
               axisLine={{ stroke: '#475569' }}
@@ -337,7 +310,7 @@ const TelemetryCharts = memo(function TelemetryCharts({ robotId, telemetryHistor
               <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
               <span className="text-[10px] text-slate-400">{label}</span>
             </div>
-          )
+          ),
         )}
       </div>
     </div>
@@ -353,8 +326,7 @@ function useStableNames(fleet) {
   const prev = ref.current
   const prevKeys = Object.keys(prev)
   const same =
-    prevKeys.length === Object.keys(next).length &&
-    prevKeys.every((k) => prev[k] === next[k])
+    prevKeys.length === Object.keys(next).length && prevKeys.every((k) => prev[k] === next[k])
   if (!same) ref.current = next
   return ref.current
 }
@@ -396,12 +368,8 @@ export default function FleetMonitor({
         <div className="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center mb-4">
           <Bot size={28} className="text-slate-600" />
         </div>
-        <h3 className="text-lg font-semibold text-slate-400 mb-1">
-          Waiting for fleet data...
-        </h3>
-        <p className="text-sm text-slate-600">
-          Connecting to telemetry stream
-        </p>
+        <h3 className="text-lg font-semibold text-slate-400 mb-1">Waiting for fleet data...</h3>
+        <p className="text-sm text-slate-600">Connecting to telemetry stream</p>
       </div>
     )
   }
@@ -429,11 +397,7 @@ export default function FleetMonitor({
           value={`${avgBattery.toFixed(0)}%`}
           sub={`Min: ${minBattery.toFixed(0)}%`}
           color={
-            avgBattery > 50
-              ? 'text-green-400'
-              : avgBattery > 20
-                ? 'text-amber-400'
-                : 'text-red-400'
+            avgBattery > 50 ? 'text-green-400' : avgBattery > 20 ? 'text-amber-400' : 'text-red-400'
           }
         />
         <StatCard
@@ -470,17 +434,12 @@ export default function FleetMonitor({
         {/* Alerts + Telemetry Detail */}
         <div className="space-y-4">
           <AlertPanel alerts={alerts} robotNames={robotNames} />
-          {selectedRobot && (
-            <TelemetryPanel robot={selectedRobot} />
-          )}
+          {selectedRobot && <TelemetryPanel robot={selectedRobot} />}
         </div>
       </div>
 
       {/* Bottom Row: Charts */}
-      <TelemetryCharts
-        robotId={selectedRobot?.robot_id}
-        telemetryHistory={telemetryHistory}
-      />
+      <TelemetryCharts robotId={selectedRobot?.robot_id} telemetryHistory={telemetryHistory} />
     </div>
   )
 }

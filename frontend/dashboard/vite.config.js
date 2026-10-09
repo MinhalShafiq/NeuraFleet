@@ -4,7 +4,10 @@ import { visualizer } from 'rollup-plugin-visualizer'
 
 export default defineConfig({
   // `ANALYZE=1 npm run build` writes dist/stats.html (treemap of what's in each chunk).
-  plugins: [react(), ...(process.env.ANALYZE ? [visualizer({ filename: 'dist/stats.html', gzipSize: true })] : [])],
+  plugins: [
+    react(),
+    ...(process.env.ANALYZE ? [visualizer({ filename: 'dist/stats.html', gzipSize: true })] : []),
+  ],
   server: {
     port: 3000,
     proxy: {

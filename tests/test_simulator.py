@@ -1,5 +1,4 @@
 """FleetSimulator: reproducibility (plan 2.2) and stateful alerts (plan 0.5)."""
-import pytest
 
 from conftest import load_module
 

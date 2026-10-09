@@ -1,11 +1,11 @@
 """LiDAR service behaviour: no event-loop stalls (plan 1.1.2) and one producer per robot (1.1.3)."""
+
 import asyncio
 import json
 import time
 
 import httpx
 import pytest
-
 from conftest import load_module
 
 svc = load_module("lidar-service", "main")
@@ -24,7 +24,9 @@ def live_server():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(svc.app, host="127.0.0.1", port=port, log_level="warning"))
+    server = uvicorn.Server(
+        uvicorn.Config(svc.app, host="127.0.0.1", port=port, log_level="warning")
+    )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     deadline = time.time() + 10
@@ -38,6 +40,7 @@ def live_server():
 
 def _connect(base, robot_id):
     from websockets.sync.client import connect
+
     return connect(f"{base}/ws/lidar/{robot_id}", open_timeout=10, close_timeout=2)
 
 
@@ -48,8 +51,11 @@ def _recv_frames(ws, n):
 def test_clients_share_one_producer(live_server):
     """3 viewers of one robot must see the *same* frames, not advance the robot 3x."""
     before = svc._frame_counters.get("robot-001", 0)
-    with _connect(live_server, "robot-001") as a, _connect(live_server, "robot-001") as b, \
-            _connect(live_server, "robot-001") as c:
+    with (
+        _connect(live_server, "robot-001") as a,
+        _connect(live_server, "robot-001") as b,
+        _connect(live_server, "robot-001") as c,
+    ):
         frames = [_recv_frames(w, 4) for w in (a, b, c)]
     produced = svc._frame_counters["robot-001"] - before
 
@@ -74,8 +80,11 @@ def test_producer_stops_when_last_client_leaves(live_server):
 
 def test_stream_rate_is_about_5hz_with_three_viewers(live_server):
     """Exit criterion: sustained ~5 Hz with 3 concurrent viewers."""
-    with _connect(live_server, "robot-003") as a, _connect(live_server, "robot-003") as b, \
-            _connect(live_server, "robot-004") as c:
+    with (
+        _connect(live_server, "robot-003") as a,
+        _connect(live_server, "robot-003") as b,
+        _connect(live_server, "robot-004") as c,
+    ):
         for w in (a, b, c):
             _recv_frames(w, 1)
         t = time.perf_counter()
@@ -87,6 +96,7 @@ def test_stream_rate_is_about_5hz_with_three_viewers(live_server):
 
 def test_downsampling_preserves_order():
     import numpy as np
+
     pts = np.arange(10_000 * 4, dtype=float).reshape(-1, 4)
     out = svc._scan_to_dict("r", pts, max_stream_points=2000)["points"]
     firsts = [p[0] for p in out]
@@ -124,6 +134,7 @@ def test_event_loop_is_not_blocked_by_scans():
 def test_frames_are_compact():
     """float32 rounded then .tolist() gives reprs like 56.43299865722656 (81 B/point, 2.5x bloat)."""
     import numpy as np
+
     pts = svc.LidarSimulator(seed=1).generate_scan((50.0, 50.0, 0.0), 0.3)
     frame = svc._scan_json("r", pts, 2000, 1)
     per_point = len(frame) / json.loads(frame)["num_points"]
@@ -134,4 +145,16 @@ def test_frames_are_compact():
 def test_lidar_stream_has_per_message_deflate_disabled():
     """Compression runs synchronously on the event-loop thread per viewer (~11 ms/frame each)."""
     from conftest import SERVICE_DIRS
-    assert '"--ws-per-message-deflate", "false"' in (SERVICE_DIRS["lidar-service"] / "Dockerfile").read_text()
+
+    assert (
+        '"--ws-per-message-deflate", "false"'
+        in (SERVICE_DIRS["lidar-service"] / "Dockerfile").read_text()
+    )
+
+
+def test_unknown_robot_stream_is_refused_and_allocates_nothing(live_server):
+    import websockets
+
+    with pytest.raises(websockets.exceptions.InvalidHandshake):
+        _connect(live_server, "not-a-robot")
+    assert "not-a-robot" not in svc._simulators and "not-a-robot" not in svc.hub._tasks

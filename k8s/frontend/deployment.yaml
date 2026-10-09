@@ -27,7 +27,8 @@ spec:
         fsGroup: 101
       containers:
         - name: frontend
-          image: gcr.io/PROJECT_ID/neurafleet-frontend:latest
+          image: gcr.io/PROJECT_ID/neurafleet-frontend:0.0.0-unset  # real tag injected by kustomize (see k8s/kustomization.yaml)
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
               protocol: TCP

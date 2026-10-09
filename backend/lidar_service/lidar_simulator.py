@@ -19,28 +19,29 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass, field
-from typing import List, Tuple
 
 import numpy as np
-
 
 # ---------------------------------------------------------------------------
 # Environment primitives
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Box:
     """Axis-aligned box obstacle."""
+
     cx: float
     cy: float
-    half_w: float   # half-width along x
-    half_d: float   # half-depth along y
-    height: float   # total height
+    half_w: float  # half-width along x
+    half_d: float  # half-depth along y
+    height: float  # total height
 
 
 @dataclass
 class Cylinder:
     """Cylindrical obstacle (pillar / tree)."""
+
     cx: float
     cy: float
     radius: float
@@ -50,6 +51,7 @@ class Cylinder:
 @dataclass
 class Wall:
     """A thin vertical wall segment between two 2D endpoints."""
+
     x1: float
     y1: float
     x2: float
@@ -61,13 +63,15 @@ class Wall:
 # Simulated environment (persistent between scans)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Environment:
     """Holds all static obstacles for the simulated world."""
+
     area_size: float = 100.0
-    boxes: List[Box] = field(default_factory=list)
-    cylinders: List[Cylinder] = field(default_factory=list)
-    walls: List[Wall] = field(default_factory=list)
+    boxes: list[Box] = field(default_factory=list)
+    cylinders: list[Cylinder] = field(default_factory=list)
+    walls: list[Wall] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.boxes:
@@ -95,12 +99,14 @@ class Environment:
         # Perimeter walls
         s = self.area_size
         wall_h = 4.0
-        self.walls.extend([
-            Wall(0, 0, s, 0, wall_h),     # south
-            Wall(s, 0, s, s, wall_h),      # east
-            Wall(s, s, 0, s, wall_h),      # north
-            Wall(0, s, 0, 0, wall_h),      # west
-        ])
+        self.walls.extend(
+            [
+                Wall(0, 0, s, 0, wall_h),  # south
+                Wall(s, 0, s, s, wall_h),  # east
+                Wall(s, s, 0, s, wall_h),  # north
+                Wall(0, s, 0, 0, wall_h),  # west
+            ]
+        )
         # A few interior walls
         for _ in range(3):
             x1 = rng.uniform(15, s - 15)
@@ -115,6 +121,7 @@ class Environment:
 # ---------------------------------------------------------------------------
 # LiDAR Simulator
 # ---------------------------------------------------------------------------
+
 
 class LidarSimulator:
     """
@@ -142,7 +149,7 @@ class LidarSimulator:
         max_range: float = 100.0,
         num_channels: int = 16,
         h_resolution: float = 0.4,
-        v_fov: Tuple[float, float] = (-15.0, 15.0),
+        v_fov: tuple[float, float] = (-15.0, 15.0),
         seed: int | None = None,
     ):
         self.env = environment or Environment()
@@ -153,9 +160,7 @@ class LidarSimulator:
 
         # Pre-compute vertical angles for channels
         v_min, v_max = v_fov
-        self._v_angles = np.linspace(
-            np.radians(v_min), np.radians(v_max), num_channels
-        )
+        self._v_angles = np.linspace(np.radians(v_min), np.radians(v_max), num_channels)
         # Horizontal angles (full 360 deg)
         self._h_angles = np.arange(0, 360, h_resolution)
         self._h_angles_rad = np.radians(self._h_angles)
@@ -225,10 +230,7 @@ class LidarSimulator:
         denom = dx * wy - dy * wx
         valid = np.abs(denom) >= 1e-12
         t = ((wall.x1 - ox) * wy - (wall.y1 - oy) * wx) / np.where(valid, denom, 1.0)
-        if abs(wx) > abs(wy):
-            s = (ox + t * dx - wall.x1) / wx
-        else:
-            s = (oy + t * dy - wall.y1) / wy
+        s = (ox + t * dx - wall.x1) / wx if abs(wx) > abs(wy) else (oy + t * dy - wall.y1) / wy
         z_hit = oz + t * dz
         ok = valid & (t >= 0) & (s >= 0) & (s <= 1) & (z_hit >= 0) & (z_hit <= wall.height)
         return np.where(ok, t, np.inf)
@@ -239,7 +241,7 @@ class LidarSimulator:
 
     def generate_scan(
         self,
-        robot_position: Tuple[float, float, float],
+        robot_position: tuple[float, float, float],
         robot_heading: float,
         noise: bool = True,
     ) -> np.ndarray:

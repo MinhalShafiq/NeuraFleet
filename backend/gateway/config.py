@@ -20,20 +20,22 @@ class Settings:
     """Immutable gateway configuration."""
 
     # Internal microservice URLs
-    lidar_service_url: str = os.getenv(
-        "LIDAR_SERVICE_URL", "http://lidar-service:8001"
-    )
-    telemetry_service_url: str = os.getenv(
-        "TELEMETRY_SERVICE_URL", "http://telemetry-service:8002"
-    )
-    rag_service_url: str = os.getenv(
-        "RAG_SERVICE_URL", "http://rag-service:8003"
-    )
+    lidar_service_url: str = os.getenv("LIDAR_SERVICE_URL", "http://lidar-service:8001")
+    telemetry_service_url: str = os.getenv("TELEMETRY_SERVICE_URL", "http://telemetry-service:8002")
+    rag_service_url: str = os.getenv("RAG_SERVICE_URL", "http://rag-service:8003")
 
     # Gateway settings
     host: str = os.getenv("GATEWAY_HOST", "0.0.0.0")
     port: int = int(os.getenv("GATEWAY_PORT", "8000"))
     debug: bool = os.getenv("GATEWAY_DEBUG", "false").lower() == "true"
+
+    # Browser origins allowed to call the API cross-origin (comma-separated).  The dashboard
+    # normally uses same-origin /api via its nginx, so this only matters for direct API use.
+    cors_origins: tuple[str, ...] = tuple(
+        o.strip()
+        for o in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+        if o.strip()
+    )
 
     # Timeouts (seconds)
     http_timeout: float = float(os.getenv("HTTP_TIMEOUT", "10.0"))

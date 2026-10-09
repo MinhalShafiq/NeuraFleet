@@ -12,6 +12,7 @@ import {
   Cpu,
 } from 'lucide-react'
 import clsx from 'clsx'
+import DemoBadge from './DemoBadge'
 
 const STATUS_COLORS = {
   active: 'bg-cyan-400 ring-cyan-400/30',
@@ -66,7 +67,7 @@ export default function Layout({
       <aside
         className={clsx(
           'flex flex-col border-r border-slate-700/50 bg-slate-900 transition-all duration-300 shrink-0',
-          collapsed ? 'w-16' : 'w-64'
+          collapsed ? 'w-16' : 'w-64',
         )}
       >
         {/* Logo */}
@@ -76,9 +77,7 @@ export default function Layout({
           </div>
           {!collapsed && (
             <div className="animate-fade-in">
-              <h1 className="text-base font-bold text-white tracking-tight">
-                NeuraFleet
-              </h1>
+              <h1 className="text-base font-bold text-white tracking-tight">NeuraFleet</h1>
               <p className="text-[10px] text-slate-500 font-medium uppercase tracking-widest">
                 Command Center
               </p>
@@ -103,7 +102,7 @@ export default function Layout({
                 onClick={() => onChangeView(item.id)}
                 className={clsx(
                   'nav-item w-full',
-                  isActive ? 'nav-item-active' : 'nav-item-inactive'
+                  isActive ? 'nav-item-active' : 'nav-item-inactive',
                 )}
                 title={collapsed ? item.label : undefined}
               >
@@ -130,18 +129,14 @@ export default function Layout({
                   'w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-150 text-left',
                   selectedRobot?.robot_id === robot.robot_id
                     ? 'bg-slate-800 border border-slate-600/50'
-                    : 'hover:bg-slate-800/50'
+                    : 'hover:bg-slate-800/50',
                 )}
                 title={collapsed ? `${robot.name} - ${robot.status}` : undefined}
               >
-                <span
-                  className={clsx('status-dot shrink-0', STATUS_COLORS[robot.status])}
-                />
+                <span className={clsx('status-dot shrink-0', STATUS_COLORS[robot.status])} />
                 {!collapsed && (
                   <div className="min-w-0 flex-1 animate-fade-in">
-                    <p className="text-sm font-medium text-slate-200 truncate">
-                      {robot.name}
-                    </p>
+                    <p className="text-sm font-medium text-slate-200 truncate">{robot.name}</p>
                     <p className="text-[11px] text-slate-500 capitalize">
                       {robot.robot_type} - {robot.status}
                     </p>
@@ -156,7 +151,7 @@ export default function Layout({
                           ? 'text-green-400'
                           : robot.battery > 20
                             ? 'text-amber-400'
-                            : 'text-red-400'
+                            : 'text-red-400',
                       )}
                     >
                       {robot.battery?.toFixed(0)}%
@@ -166,9 +161,7 @@ export default function Layout({
               </button>
             ))}
             {fleet.length === 0 && !collapsed && (
-              <p className="text-xs text-slate-600 text-center py-4">
-                No robots detected
-              </p>
+              <p className="text-xs text-slate-600 text-center py-4">No robots detected</p>
             )}
           </div>
         </div>
@@ -185,7 +178,7 @@ export default function Layout({
               <span
                 className={clsx(
                   'text-xs font-medium',
-                  connected ? 'text-green-400' : 'text-red-400'
+                  connected ? 'text-green-400' : 'text-red-400',
                 )}
               >
                 {connected ? 'Connected' : 'Reconnecting...'}
@@ -200,9 +193,8 @@ export default function Layout({
         {/* Top Bar */}
         <header className="flex items-center justify-between px-6 py-3 border-b border-slate-700/50 bg-slate-900/80 backdrop-blur-sm shrink-0">
           <div className="flex items-center gap-3">
-            <h2 className="text-lg font-semibold text-white">
-              {VIEW_TITLES[activeView]}
-            </h2>
+            <h2 className="text-lg font-semibold text-white">{VIEW_TITLES[activeView]}</h2>
+            {fleet.some((r) => r.demo) && <DemoBadge />}
             {selectedRobot && (
               <span className="text-xs bg-slate-800 border border-slate-700 text-slate-300 px-2.5 py-1 rounded-full font-medium">
                 <Bot size={12} className="inline mr-1 -mt-0.5" />
@@ -218,9 +210,7 @@ export default function Layout({
                 <span
                   className={clsx(
                     'absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold text-white px-1',
-                    criticalAlerts > 0
-                      ? 'bg-red-500 animate-pulse'
-                      : 'bg-amber-500'
+                    criticalAlerts > 0 ? 'bg-red-500 animate-pulse' : 'bg-amber-500',
                   )}
                 >
                   {alerts.length}

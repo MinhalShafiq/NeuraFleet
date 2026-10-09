@@ -1,6 +1,6 @@
 """Shared helpers: load each service's modules by path (they all call theirs ``main``)."""
+
 import importlib.util
-import os
 import sys
 from pathlib import Path
 
@@ -8,6 +8,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
+
+# Services import the shared contract as ``shared.*`` (in Docker it sits at /app/shared).
+sys.path.insert(0, str(BACKEND))
 
 # Only the service directories themselves; ``main`` collisions are avoided by load_module.
 SERVICE_DIRS = {

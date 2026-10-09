@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import List, Optional
 
 logger = logging.getLogger("rag_service.llm_client")
 
@@ -44,15 +43,14 @@ class LLMClient:
         if self._api_key:
             try:
                 import anthropic
+
                 # Async client: the sync one blocks the event loop for the whole LLM round trip.
                 self._client = anthropic.AsyncAnthropic(api_key=self._api_key)
                 logger.info("Anthropic client initialised (model=%s)", self._model)
             except Exception as exc:
                 logger.warning("Failed to initialise Anthropic client: %s", exc)
         else:
-            logger.info(
-                "ANTHROPIC_API_KEY not set; using rule-based fallback responses."
-            )
+            logger.info("ANTHROPIC_API_KEY not set; using rule-based fallback responses.")
 
     # ------------------------------------------------------------------
     # Public API
@@ -61,8 +59,8 @@ class LLMClient:
     async def generate_response(
         self,
         query: str,
-        context: List[str],
-        robot_id: Optional[str] = None,
+        context: list[str],
+        robot_id: str | None = None,
     ) -> str:
         """
         Generate a response to the user's query grounded in *context*.
@@ -92,8 +90,8 @@ class LLMClient:
     async def _call_anthropic(
         self,
         query: str,
-        context: List[str],
-        robot_id: Optional[str],
+        context: list[str],
+        robot_id: str | None,
     ) -> str:
         context_block = "\n\n---\n\n".join(context) if context else "(no context available)"
         user_msg = (
@@ -102,6 +100,7 @@ class LLMClient:
             f"Question: {query}"
         )
 
+        assert self._client is not None  # only called when the client was constructed
         try:
             message = await self._client.messages.create(
                 model=self._model,
@@ -109,7 +108,8 @@ class LLMClient:
                 system=self.SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_msg}],
             )
-            return message.content[0].text
+            # Join every text block (the reply can be split across several).
+            return "".join(b.text for b in message.content if b.type == "text")
         except Exception as exc:
             logger.error("Anthropic API call failed: %s", exc)
             return self._rule_based_response(query, context, robot_id)
@@ -121,8 +121,8 @@ class LLMClient:
     def _rule_based_response(
         self,
         query: str,
-        context: List[str],
-        robot_id: Optional[str],
+        context: list[str],
+        robot_id: str | None,
     ) -> str:
         """
         Analyse query keywords and the retrieved context to produce a
@@ -225,9 +225,9 @@ class LLMClient:
     @staticmethod
     def _extract_relevant_snippets(
         query_lower: str,
-        context: List[str],
+        context: list[str],
         max_snippets: int = 3,
-    ) -> List[str]:
+    ) -> list[str]:
         """Pick the most relevant context snippets by keyword overlap."""
         query_words = set(re.findall(r"\w+", query_lower))
         scored: list = []

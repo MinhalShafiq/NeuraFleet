@@ -14,17 +14,15 @@ from __future__ import annotations
 
 import math
 import random
-import time
 import zlib
 from collections import deque
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
-
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class RobotConfig:
@@ -33,7 +31,7 @@ class RobotConfig:
     robot_type: str
 
 
-FLEET_CONFIG: List[RobotConfig] = [
+FLEET_CONFIG: list[RobotConfig] = [
     RobotConfig("robot-001", "Atlas-1", "explorer"),
     RobotConfig("robot-002", "Scout-2", "scout"),
     RobotConfig("robot-003", "Hauler-3", "hauler"),
@@ -46,6 +44,7 @@ FLEET_CONFIG: List[RobotConfig] = [
 @dataclass
 class RobotSim:
     """Mutable simulation state for one robot."""
+
     robot_id: str
     name: str
     robot_type: str
@@ -92,6 +91,7 @@ class RobotSim:
 # Fleet Simulator
 # ---------------------------------------------------------------------------
 
+
 def _stable_phase(robot_id: str) -> int:
     """Process-independent replacement for ``hash(str)`` (PYTHONHASHSEED-safe)."""
     return zlib.crc32(robot_id.encode()) % 100
@@ -106,16 +106,17 @@ class FleetSimulator:
     serialisation to JSON / Pydantic models.
     """
 
-    def __init__(self, configs: List[RobotConfig] | None = None, area_size: float = 100.0,
-                 seed: int = 12345):
+    def __init__(
+        self, configs: list[RobotConfig] | None = None, area_size: float = 100.0, seed: int = 12345
+    ):
         self.configs = configs or FLEET_CONFIG
         self.area_size = area_size
-        self.robots: Dict[str, RobotSim] = {}
+        self.robots: dict[str, RobotSim] = {}
         # Stateful alerts keyed by (robot_id, alert_type); see _sync_alerts.
-        self._active_alerts: Dict[Tuple[str, str], dict] = {}
+        self._active_alerts: dict[tuple[str, str], dict] = {}
         self._resolved_alerts: deque = deque(maxlen=50)
         self._alert_seq: int = 0
-        self._metrics_history: Dict[str, deque] = {}
+        self._metrics_history: dict[str, deque] = {}
         self._sim_time: float = 0.0
 
         self._rng = random.Random(seed)
@@ -161,15 +162,17 @@ class FleetSimulator:
             self._maybe_inject_anomaly(r, dt)
 
             # Record metric snapshot (capped at 100 per robot)
-            vel_mag = math.sqrt(r.vx ** 2 + r.vy ** 2 + r.vz ** 2)
-            self._metrics_history[r.robot_id].append({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "battery": round(r.battery, 2),
-                "cpu_usage": round(r.cpu_usage, 2),
-                "memory_usage": round(r.memory_usage, 2),
-                "temperature": round(r.temperature, 2),
-                "velocity_magnitude": round(vel_mag, 3),
-            })
+            vel_mag = math.sqrt(r.vx**2 + r.vy**2 + r.vz**2)
+            self._metrics_history[r.robot_id].append(
+                {
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "battery": round(r.battery, 2),
+                    "cpu_usage": round(r.cpu_usage, 2),
+                    "memory_usage": round(r.memory_usage, 2),
+                    "temperature": round(r.temperature, 2),
+                    "velocity_magnitude": round(vel_mag, 3),
+                }
+            )
 
             # Anomaly detection -> alert state transitions
             self._sync_alerts(r, self._detect_anomalies(r))
@@ -247,9 +250,14 @@ class FleetSimulator:
         else:
             # Active: random walk with momentum
             r.heading += self._rng.gauss(0, 0.3 * dt)
-            target_speed = {"explorer": 2.0, "hauler": 1.2, "scout": 2.5,
-                            "sentinel": 0.8, "mapper": 1.5, "relay": 0.5
-                            }.get(r.robot_type, 1.5)
+            target_speed = {
+                "explorer": 2.0,
+                "hauler": 1.2,
+                "scout": 2.5,
+                "sentinel": 0.8,
+                "mapper": 1.5,
+                "relay": 0.5,
+            }.get(r.robot_type, 1.5)
             r.vx += (target_speed * math.cos(r.heading) - r.vx) * 0.1
             r.vy += (target_speed * math.sin(r.heading) - r.vy) * 0.1
             # Slight vertical bobbing
@@ -262,13 +270,17 @@ class FleetSimulator:
         # Boundary clamping
         margin = 2.0
         if r.x < margin:
-            r.x = margin; r.vx = abs(r.vx)
+            r.x = margin
+            r.vx = abs(r.vx)
         elif r.x > self.area_size - margin:
-            r.x = self.area_size - margin; r.vx = -abs(r.vx)
+            r.x = self.area_size - margin
+            r.vx = -abs(r.vx)
         if r.y < margin:
-            r.y = margin; r.vy = abs(r.vy)
+            r.y = margin
+            r.vy = abs(r.vy)
         elif r.y > self.area_size - margin:
-            r.y = self.area_size - margin; r.vy = -abs(r.vy)
+            r.y = self.area_size - margin
+            r.vy = -abs(r.vy)
 
         r.z = max(0, min(r.z, 0.5))
 
@@ -344,7 +356,7 @@ class FleetSimulator:
             # Gyroscope
             r.imu_gx = self._rng.gauss(0, 0.01)
             r.imu_gy = self._rng.gauss(0, 0.01)
-            heading_rate = (r.vy * math.cos(r.heading) - r.vx * math.sin(r.heading))
+            heading_rate = r.vy * math.cos(r.heading) - r.vx * math.sin(r.heading)
             r.imu_gz = heading_rate * 0.05 + self._rng.gauss(0, 0.005)
 
         # GPS (map sim coords to lat/lon)
@@ -385,14 +397,17 @@ class FleetSimulator:
     _BATT_RAISE, _BATT_CLEAR = 20.0, 23.0
     _PROX_RAISE, _PROX_CLEAR = 3.0, 3.5
 
-    def _detect_anomalies(self, r: RobotSim) -> Dict[str, Tuple[str, str]]:
+    def _detect_anomalies(self, r: RobotSim) -> dict[str, tuple[str, str]]:
         """Return ``{alert_type: (severity, message)}`` for conditions currently true."""
+
         def active(atype: str) -> bool:
             return (r.robot_id, atype) in self._active_alerts
 
-        found: Dict[str, Tuple[str, str]] = {}
+        found: dict[str, tuple[str, str]] = {}
 
-        if r.temperature > self._TEMP_RAISE or (active("high_temperature") and r.temperature > self._TEMP_CLEAR):
+        if r.temperature > self._TEMP_RAISE or (
+            active("high_temperature") and r.temperature > self._TEMP_CLEAR
+        ):
             sev = "critical" if r.temperature > 85 else "warning"
             found["high_temperature"] = (sev, f"Temperature at {r.temperature:.1f}°C on {r.name}")
 
@@ -415,16 +430,20 @@ class FleetSimulator:
             if d < nearest_d:
                 nearest, nearest_d = other, d
         if nearest is not None and (
-            nearest_d < self._PROX_RAISE or (active("collision_proximity") and nearest_d < self._PROX_CLEAR)
+            nearest_d < self._PROX_RAISE
+            or (active("collision_proximity") and nearest_d < self._PROX_CLEAR)
         ):
             sev = "warning" if nearest_d > 1.5 else "critical"
-            found["collision_proximity"] = (sev, f"{r.name} within {nearest_d:.1f} m of {nearest.name}")
+            found["collision_proximity"] = (
+                sev,
+                f"{r.name} within {nearest_d:.1f} m of {nearest.name}",
+            )
 
         return found
 
-    def _sync_alerts(self, r: RobotSim, found: Dict[str, Tuple[str, str]]) -> None:
+    def _sync_alerts(self, r: RobotSim, found: dict[str, tuple[str, str]]) -> None:
         """Raise / update / clear this robot's alerts based on *found*."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         for atype, (sev, msg) in found.items():
             key = (r.robot_id, atype)
@@ -454,30 +473,30 @@ class FleetSimulator:
     # Public query methods
     # ------------------------------------------------------------------
 
-    def get_telemetry(self) -> List[dict]:
+    def get_telemetry(self) -> list[dict]:
         """Return telemetry snapshots for all robots."""
         return [self._robot_telemetry(r) for r in self.robots.values()]
 
-    def get_robot(self, robot_id: str) -> Optional[dict]:
+    def get_robot(self, robot_id: str) -> dict | None:
         """Return full state for one robot, or None."""
         r = self.robots.get(robot_id)
         if r is None:
             return None
         return self._robot_state(r)
 
-    def get_all_robots(self) -> List[dict]:
+    def get_all_robots(self) -> list[dict]:
         """Return full state (with name/type) for all robots."""
         return [self._robot_state(r) for r in self.robots.values()]
 
-    def get_alerts(self) -> List[dict]:
+    def get_alerts(self) -> list[dict]:
         """Return currently active alerts, oldest first."""
         return [dict(a) for a in self._active_alerts.values()]
 
-    def get_resolved_alerts(self) -> List[dict]:
+    def get_resolved_alerts(self) -> list[dict]:
         """Return the bounded history (last 50) of cleared alerts."""
         return [dict(a) for a in self._resolved_alerts]
 
-    def get_metrics(self, robot_id: str) -> Optional[dict]:
+    def get_metrics(self, robot_id: str) -> dict | None:
         """Return metrics history for a robot (up to 100 points)."""
         history = self._metrics_history.get(robot_id)
         if history is None:
@@ -495,7 +514,7 @@ class FleetSimulator:
     def _robot_telemetry(r: RobotSim) -> dict:
         return {
             "robot_id": r.robot_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "position": {"x": round(r.x, 4), "y": round(r.y, 4), "z": round(r.z, 4)},
             "velocity": {"vx": round(r.vx, 4), "vy": round(r.vy, 4), "vz": round(r.vz, 4)},
             "battery": round(r.battery, 2),

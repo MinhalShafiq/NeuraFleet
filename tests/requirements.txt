@@ -1,2 +1,5 @@
 pytest>=7
 pyyaml>=6
+ruff==0.16.10
+mypy==2.4.0
+types-PyYAML

@@ -29,7 +29,8 @@ spec:
       # call, so there is nothing for a GPU to do here (and no GPU request/toleration).
       containers:
         - name: rag-service
-          image: gcr.io/PROJECT_ID/neurafleet-rag-service:latest
+          image: gcr.io/PROJECT_ID/neurafleet-rag-service:0.0.0-unset  # real tag injected by kustomize (see k8s/kustomization.yaml)
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8003
               protocol: TCP

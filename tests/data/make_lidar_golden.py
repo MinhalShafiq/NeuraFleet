@@ -5,6 +5,7 @@ it was vectorized) with Gaussian noise disabled.  Do not regenerate them from th
 vectorized implementation - that would make the characterization test circular.
 Run from the repo root:  python tests/data/make_lidar_golden.py
 """
+
 import random
 import sys
 from pathlib import Path

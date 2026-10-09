@@ -23,14 +23,6 @@ module "k8s" {
   depends_on = [module.networking]
 }
 
-module "storage" {
-  source = "./modules/storage"
-
-  project_id  = var.project_id
-  region      = var.region
-  environment = var.environment
-}
-
 # Only created when gpu_node_count > 0 (the default is 0: no workload uses a GPU).
 module "gpu" {
   source = "./modules/gpu"

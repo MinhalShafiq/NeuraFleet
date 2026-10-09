@@ -1,10 +1,12 @@
-import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Canvas, useThree } from '@react-three/fiber'
 import { OrbitControls, Stats } from '@react-three/drei'
 import * as THREE from 'three'
 import { Radar, ChevronDown } from 'lucide-react'
 import clsx from 'clsx'
 import { createLidarSocket } from '../services/api'
+import { connectWithBackoff } from '../services/reconnect'
+import DemoBadge from './DemoBadge'
 
 // GPU buffers are allocated once at this size and reused for every frame
 // (the REST scan tops out at 15,000 points; the stream sends ~2,000).
@@ -67,13 +69,7 @@ function PointCloud({ lidarData }) {
   return (
     // frustumCulled off: the bounding sphere is computed once and these points move.
     <points geometry={geometry} frustumCulled={false}>
-      <pointsMaterial
-        size={0.05}
-        vertexColors
-        sizeAttenuation={true}
-        transparent
-        opacity={0.9}
-      />
+      <pointsMaterial size={0.05} vertexColors sizeAttenuation={true} transparent opacity={0.9} />
     </points>
   )
 }
@@ -126,79 +122,28 @@ export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }
   const [showDropdown, setShowDropdown] = useState(false)
   const [showStats, setShowStats] = useState(false)
 
-  const wsRef = useRef(null)
-  const reconnectRef = useRef(null)
-
   const robotId = selectedRobot?.robot_id
-
-  const connectLidar = useCallback(
-    (rid) => {
-      if (!rid) return
-
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
-      }
-      if (reconnectRef.current) {
-        clearTimeout(reconnectRef.current)
-        reconnectRef.current = null
-      }
-
-      try {
-        const ws = createLidarSocket(rid)
-
-        ws.onopen = () => setWsConnected(true)
-
-        ws.onmessage = (event) => {
-          try {
-            setFrame(JSON.parse(event.data))
-          } catch (err) {
-            console.error('Failed to parse LiDAR data:', err)
-          }
-        }
-
-        ws.onclose = () => {
-          setWsConnected(false)
-          wsRef.current = null
-          reconnectRef.current = setTimeout(() => connectLidar(rid), 3000)
-        }
-
-        ws.onerror = () => {
-          ws.close()
-        }
-
-        wsRef.current = ws
-      } catch (err) {
-        console.error('LiDAR WS connection failed:', err)
-        reconnectRef.current = setTimeout(() => connectLidar(rid), 3000)
-      }
-    },
-    []
-  )
 
   useEffect(() => {
     setFrame(null)
+    if (!robotId) return undefined
 
-    if (robotId) {
-      connectLidar(robotId)
-    }
-
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
-      }
-      if (reconnectRef.current) {
-        clearTimeout(reconnectRef.current)
-        reconnectRef.current = null
-      }
-    }
-  }, [robotId, connectLidar])
+    const connection = connectWithBackoff(() => createLidarSocket(robotId), {
+      onOpen: () => setWsConnected(true),
+      onClose: () => setWsConnected(false),
+      onMessage: (event) => {
+        try {
+          setFrame(JSON.parse(event.data))
+        } catch (err) {
+          console.error('Failed to parse LiDAR data:', err)
+        }
+      },
+    })
+    return () => connection.close()
+  }, [robotId])
 
   const robotName =
-    selectedRobot?.name ||
-    fleet.find((r) => r.robot_id === robotId)?.name ||
-    robotId
+    selectedRobot?.name || fleet.find((r) => r.robot_id === robotId)?.name || robotId
 
   return (
     <div className="h-full flex flex-col animate-fade-in">
@@ -219,7 +164,7 @@ export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }
                 size={14}
                 className={clsx(
                   'text-slate-400 transition-transform',
-                  showDropdown && 'rotate-180'
+                  showDropdown && 'rotate-180',
                 )}
               />
             </button>
@@ -236,37 +181,33 @@ export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }
                       'w-full text-left px-3 py-2 text-sm hover:bg-slate-700/50 transition-colors',
                       selectedRobot?.robot_id === robot.robot_id
                         ? 'text-primary-400 bg-primary-600/10'
-                        : 'text-slate-300'
+                        : 'text-slate-300',
                     )}
                   >
                     {robot.name}
-                    <span className="text-[10px] text-slate-500 ml-2">
-                      {robot.robot_type}
-                    </span>
+                    <span className="text-[10px] text-slate-500 ml-2">{robot.robot_type}</span>
                   </button>
                 ))}
                 {fleet.length === 0 && (
-                  <p className="text-xs text-slate-500 px-3 py-2">
-                    No robots available
-                  </p>
+                  <p className="text-xs text-slate-500 px-3 py-2">No robots available</p>
                 )}
               </div>
             )}
           </div>
 
+          {frame?.demo && <DemoBadge />}
+
           {/* Connection indicator */}
           <div
             className={clsx(
               'flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full',
-              wsConnected
-                ? 'bg-green-500/10 text-green-400'
-                : 'bg-slate-700/50 text-slate-500'
+              wsConnected ? 'bg-green-500/10 text-green-400' : 'bg-slate-700/50 text-slate-500',
             )}
           >
             <div
               className={clsx(
                 'w-1.5 h-1.5 rounded-full',
-                wsConnected ? 'bg-green-400 animate-pulse' : 'bg-slate-600'
+                wsConnected ? 'bg-green-400 animate-pulse' : 'bg-slate-600',
               )}
             />
             {wsConnected ? 'Streaming' : 'Disconnected'}
@@ -281,7 +222,7 @@ export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }
               'text-xs px-2.5 py-1.5 rounded-lg border transition-colors',
               showStats
                 ? 'bg-primary-600/20 border-primary-500/30 text-primary-400'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200',
             )}
           >
             FPS Stats
@@ -296,9 +237,7 @@ export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }
             <div className="w-16 h-16 rounded-full bg-slate-800/80 flex items-center justify-center mb-4">
               <Radar size={28} className="text-slate-600" />
             </div>
-            <h3 className="text-base font-semibold text-slate-400 mb-1">
-              No Robot Selected
-            </h3>
+            <h3 className="text-base font-semibold text-slate-400 mb-1">No Robot Selected</h3>
             <p className="text-sm text-slate-600">
               Select a robot from the dropdown to view its LiDAR feed
             </p>
@@ -309,9 +248,7 @@ export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }
             <h3 className="text-base font-semibold text-slate-400 mb-1">
               Waiting for LiDAR data...
             </h3>
-            <p className="text-sm text-slate-600">
-              Connecting to {robotName}
-            </p>
+            <p className="text-sm text-slate-600">Connecting to {robotName}</p>
           </div>
         ) : null}
 
@@ -347,9 +284,7 @@ export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }
             <div className="flex items-center gap-2">
               <span className="text-slate-500">Time:</span>
               <span className="text-slate-300 font-mono">
-                {frameInfo.timestamp
-                  ? new Date(frameInfo.timestamp).toLocaleTimeString()
-                  : '--'}
+                {frameInfo.timestamp ? new Date(frameInfo.timestamp).toLocaleTimeString() : '--'}
               </span>
             </div>
           </div>

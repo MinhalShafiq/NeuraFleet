@@ -1,4 +1,5 @@
 """RAG service must not block the event loop on Chroma or LLM calls (plan 1.2)."""
+
 import asyncio
 import time
 import types
@@ -38,7 +39,13 @@ class _SlowStore:
 
     def query(self, query_text, n_results=5, filter=None):
         time.sleep(DELAY)
-        return [{"text": "Battery below 20% triggers an alert.", "metadata": {"source": "m.txt"}, "distance": 0.1}]
+        return [
+            {
+                "text": "Battery below 20% triggers an alert.",
+                "metadata": {"source": "m.txt"},
+                "distance": 0.1,
+            }
+        ]
 
     class _C:
         @staticmethod
@@ -59,7 +66,9 @@ def test_query_does_not_block_event_loop(monkeypatch):
 
     resp, lag = asyncio.run(_max_loop_lag(call))
     assert resp.status_code == 200
-    assert lag < 0.1, f"event loop blocked for {lag * 1000:.0f} ms during a {DELAY * 1000:.0f} ms store query"
+    assert lag < 0.1, (
+        f"event loop blocked for {lag * 1000:.0f} ms during a {DELAY * 1000:.0f} ms store query"
+    )
 
 
 def test_anthropic_call_is_awaited_not_blocking(monkeypatch):
@@ -70,7 +79,9 @@ def test_anthropic_call_is_awaited_not_blocking(monkeypatch):
     class _Messages:
         async def create(self, **kw):
             await asyncio.sleep(DELAY)  # a real async client yields here
-            return types.SimpleNamespace(content=[types.SimpleNamespace(text="from claude")])
+            return types.SimpleNamespace(
+                content=[types.SimpleNamespace(type="text", text="from claude")]
+            )
 
     client._client = types.SimpleNamespace(messages=_Messages())
 

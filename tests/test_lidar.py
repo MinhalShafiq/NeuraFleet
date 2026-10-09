@@ -1,10 +1,10 @@
 """Ray-caster characterization (plan 4.1). Write these BEFORE vectorizing (plan 1.1)."""
+
 import random
 import time
 
 import numpy as np
 import pytest
-
 from conftest import load_module
 
 lidar = load_module("lidar-service", "lidar_simulator")
@@ -76,9 +76,7 @@ def test_scan_fits_frame_budget():
     """5 Hz stream => 200 ms per frame; the plan's target is < 50 ms per scan."""
     sim = lidar.LidarSimulator()
     sim.generate_scan((50.0, 50.0, 0.0), 0.0)  # warm up
-    best = min(
-        _timed(lambda: sim.generate_scan((50.0, 50.0, 0.0), 0.3)) for _ in range(5)
-    )
+    best = min(_timed(lambda: sim.generate_scan((50.0, 50.0, 0.0), 0.3)) for _ in range(5))
     assert best < 0.05, f"scan took {best * 1000:.1f} ms"
 
 

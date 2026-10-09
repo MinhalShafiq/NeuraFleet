@@ -9,10 +9,11 @@ and cosine similarity for retrieval.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
@@ -59,7 +60,7 @@ class VectorStore:
     # Public API
     # ------------------------------------------------------------------
 
-    def add_documents(self, documents: List[Dict]) -> int:
+    def add_documents(self, documents: list[dict]) -> int:
         """
         Add documents to the collection.
 
@@ -72,45 +73,48 @@ class VectorStore:
         if not documents:
             return 0
 
-        ids: List[str] = []
-        texts: List[str] = []
-        metadatas: List[Optional[dict]] = []
+        # Content-addressed IDs: re-ingesting the same document is a no-op, and two
+        # different documents can never share an ID.  (The old ``doc_{count + i}`` scheme
+        # silently overwrote existing documents after any delete or second /ingest.)
+        batch: dict[str, tuple[str, dict | None]] = {}
+        for doc in documents:
+            metadata = doc.get("metadata") or None  # Chroma rejects {}
+            batch[self._doc_id(doc["text"], metadata)] = (doc["text"], metadata)
 
-        base = self._collection.count()
-        for i, doc in enumerate(documents):
-            doc_id = f"doc_{base + i}"
-            ids.append(doc_id)
-            texts.append(doc["text"])
-            metadatas.append(doc.get("metadata") or None)  # Chroma rejects {}
-
-        self._collection.add(
-            ids=ids,
-            documents=texts,
-            metadatas=metadatas,
+        before = self._collection.count()
+        self._collection.upsert(
+            ids=list(batch),
+            documents=[text for text, _ in batch.values()],
+            metadatas=[meta for _, meta in batch.values()],  # type: ignore[misc]  # None is allowed
         )
-        logger.info("Added %d documents (total now: %d)", len(ids), self._collection.count())
-        return len(ids)
+        added = self._collection.count() - before
+        logger.info(
+            "Ingested %d documents, %d new (total now: %d)", len(batch), added, before + added
+        )
+        return added
+
+    @staticmethod
+    def _doc_id(text: str, metadata: dict | None) -> str:
+        payload = json.dumps([text, metadata or {}], sort_keys=True, default=str)
+        return "doc_" + hashlib.sha256(payload.encode()).hexdigest()[:20]
 
     def query(
         self,
         query_text: str,
         n_results: int = 5,
-        filter: Optional[Dict] = None,
-    ) -> List[Dict]:
+        filter: dict | None = None,
+    ) -> list[dict]:
         """
         Retrieve the most relevant documents for a query.
 
         Returns a list of dicts with keys: ``text``, ``metadata``, ``distance``.
         """
-        kwargs: dict = {
-            "query_texts": [query_text],
-            "n_results": min(n_results, max(1, self._collection.count())),
-        }
+        total = self._collection.count()  # one store round-trip, not three
+        if total == 0:
+            return []
+        kwargs: dict = {"query_texts": [query_text], "n_results": min(n_results, total)}
         if filter:
             kwargs["where"] = filter
-
-        if self._collection.count() == 0:
-            return []
 
         try:
             results = self._collection.query(**kwargs)
@@ -118,27 +122,37 @@ class VectorStore:
             logger.error("ChromaDB query failed: %s", exc)
             return []
 
-        docs: List[Dict] = []
+        docs: list[dict] = []
         for text, meta, dist in zip(
-            results["documents"][0],
-            results["metadatas"][0],
-            results["distances"][0],
+            (results["documents"] or [[]])[0],
+            (results["metadatas"] or [[]])[0],
+            (results["distances"] or [[]])[0],
         ):
-            docs.append({
-                "text": text,
-                "metadata": meta,
-                "distance": dist,
-            })
+            docs.append(
+                {
+                    "text": text,
+                    "metadata": meta,
+                    "distance": dist,
+                }
+            )
         return docs
 
-    def list_documents(self) -> List[Dict]:
+    def list_documents(self) -> list[dict]:
         """Return all documents currently in the collection."""
         if self._collection.count() == 0:
             return []
         data = self._collection.get()
         docs = []
-        for doc_id, text, meta in zip(data["ids"], data["documents"], data["metadatas"]):
-            docs.append({"id": doc_id, "text": text[:200] + "..." if len(text) > 200 else text, "metadata": meta})
+        for doc_id, text, meta in zip(
+            data["ids"], data["documents"] or [], data["metadatas"] or []
+        ):
+            docs.append(
+                {
+                    "id": doc_id,
+                    "text": text[:200] + "..." if len(text) > 200 else text,
+                    "metadata": meta,
+                }
+            )
         return docs
 
     # ------------------------------------------------------------------
@@ -160,7 +174,7 @@ class VectorStore:
             logger.warning("Docs directory %s not found, skipping initial load.", _DOCS_DIR)
             return 0
 
-        documents: List[Dict] = []
+        documents: list[dict] = []
         category_map = {
             "robot_manual": "operations",
             "sensor_specifications": "specifications",
@@ -180,14 +194,16 @@ class VectorStore:
             # Split long docs into chunks (~500 chars) for better retrieval
             chunks = self._chunk_text(text, max_chars=500)
             for idx, chunk in enumerate(chunks):
-                documents.append({
-                    "text": chunk,
-                    "metadata": {
-                        "source": fpath.name,
-                        "category": category,
-                        "chunk_index": idx,
-                    },
-                })
+                documents.append(
+                    {
+                        "text": chunk,
+                        "metadata": {
+                            "source": fpath.name,
+                            "category": category,
+                            "chunk_index": idx,
+                        },
+                    }
+                )
 
         added = self.add_documents(documents)
         logger.info("Loaded %d document chunks from %s", added, _DOCS_DIR)
@@ -198,10 +214,10 @@ class VectorStore:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _chunk_text(text: str, max_chars: int = 500) -> List[str]:
+    def _chunk_text(text: str, max_chars: int = 500) -> list[str]:
         """Split text into chunks on paragraph boundaries."""
         paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-        chunks: List[str] = []
+        chunks: list[str] = []
         current = ""
         for para in paragraphs:
             if current and len(current) + len(para) + 2 > max_chars:
