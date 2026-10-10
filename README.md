@@ -2,7 +2,7 @@
 
 # NeuraFleet
 
-**A cloud-native robot-fleet command center: live telemetry, a real-time 3D LiDAR viewer and a RAG assistant, built as four microservices and deployable to GKE.**
+**A cloud-native robot-fleet command center: live telemetry, a real-time 3D LiDAR viewer and a RAG assistant, built as independent FastAPI services and six MQTT-connected robot agents, deployable to GKE.**
 
 [![CI](https://github.com/MinhalShafiq/NeuraFleet/actions/workflows/ci.yml/badge.svg)](https://github.com/MinhalShafiq/NeuraFleet/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
@@ -33,8 +33,10 @@ the fleet in plain English.
 - **Stateful alerts.** Raised once, updated in place, and cleared with hysteresis, so the list never flickers.
 - **RAG chat assistant.** Retrieval over the robot manuals in ChromaDB. Uses Claude when `ANTHROPIC_API_KEY` is set and a
   rule-based fallback when it isn't, so it works with no key at all.
-- **Honest about failure.** When a service dies, the dashboard keeps working on clearly-labelled demo data and recovers
-  by itself when the service returns.
+- **Each robot is its own process**, publishing over MQTT (Mosquitto) - so it can go offline, be commanded (e-stop,
+  set a goal) and recover independently of the other five, not as one in-process simulation pretending to be a fleet.
+- **Honest about failure.** When a service - or a single robot, or the broker itself - goes down, the dashboard says so
+  specifically and recovers by itself when it returns, without ever inventing data it doesn't have.
 
 <table>
 <tr>
@@ -49,16 +51,22 @@ the fleet in plain English.
 flowchart LR
     B["Browser<br/>React + three.js"] -- "HTTP / WebSocket" --> G["Gateway :8000<br/>FastAPI"]
     G --> L["LiDAR :8001<br/>ray-cast point clouds, 5 Hz"]
-    G --> T["Telemetry :8002<br/>fleet simulation + alerts, 2 Hz"]
+    G --> T["Telemetry :8002<br/>fleet aggregator + alerts"]
     G --> R["RAG :8003<br/>ChromaDB + Claude (optional)"]
     R --- C[("ChromaDB<br/>vector index")]
+    G -- "commands (publish + wait for ack)" --> M(("Mosquitto<br/>MQTT broker"))
+    M -- "telemetry 10Hz, status" --> T
+    A1["robot-001 agent"] & A2["... x6"] -- "telemetry, status (LWT)" --> M
+    M -- "cmd / cmd+ack" --> A1
 ```
 
 | Service | Role |
 |---|---|
-| **Gateway** | The single public entry point. Proxies HTTP and WebSockets; serves flagged demo data if a service is down. |
+| **Gateway** | The single public entry point. Proxies HTTP and WebSockets; serves flagged demo data if a service is down; publishes robot commands over MQTT. |
+| **Mosquitto** | The MQTT broker: telemetry/status from six independent robot agents, commands back to them. |
+| **Robot agent** ×6 | One process per robot (`ROBOT_ID`-only difference), simulating its own physics and publishing over MQTT - not one in-process loop pretending to be a fleet. |
+| **Telemetry** | Subscribes to every agent, runs the same stateful alerting (raise once, update, clear with hysteresis) and tracks per-robot connectivity. |
 | **LiDAR** | Vectorised 16-channel LiDAR simulation, motion compensation, one shared 5 Hz stream per robot. |
-| **Telemetry** | Seeded multi-robot simulation and stateful alerting (raise once, update, clear with hysteresis). |
 | **RAG** | Retrieval over the robot docs in ChromaDB, answered by Claude or a rule-based fallback. |
 | **Dashboard** | React 18 + Vite + Tailwind, with a react-three-fiber point-cloud viewer, served by unprivileged nginx. |
 
@@ -81,7 +89,7 @@ The six robots, each with its own model in the viewer:
 
 ## Run it
 
-You need **Docker with Compose v2** and free ports **3000** and **8000–8003**. No API key is required.
+You need **Docker with Compose v2** and free ports **3000**, **8000–8003** and **1883** (MQTT). No API key is required.
 (Not in the `docker` group yet? `sudo usermod -aG docker $USER`, then log out and back in.)
 
 ### 1. Start the stack
@@ -100,13 +108,14 @@ The first build downloads Python packages and an ~80 MB embedding model, so allo
 docker compose ps
 ```
 
-All five containers should say `(healthy)`. The RAG service is last, because it indexes the docs on first start.
+All 12 containers (gateway, lidar, telemetry, rag, frontend, mosquitto, and six `robot-agent-*`) should say
+`(healthy)`. The RAG service is usually last, because it indexes the docs on first start.
 Then confirm the backend is **live** and not serving fallback data:
 
 ```bash
 curl -s localhost:8000/api/health
-# {"status":"ok","services":{"telemetry":"healthy","lidar":"healthy","rag":"healthy"},
-#  "mode":{"telemetry":"live","lidar":"live","rag":"live"}}
+# {"status":"ok","services":{"telemetry":"healthy","lidar":"healthy","rag":"healthy","mqtt":"healthy"},
+#  "mode":{"telemetry":"live","lidar":"live","rag":"live","mqtt":"live"}}
 ```
 
 Every `mode` must say `live`. `mock` means the gateway is generating data because a service is unreachable.
@@ -164,6 +173,29 @@ Within about 10–30 seconds the badge clears **by itself**, with no page reload
 </tr>
 </table>
 
+### 7. Command a robot, and watch presence
+
+Each robot is its own process, talking to the fleet only over MQTT (Mosquitto), so it can be commanded
+and can go offline independently of the other five:
+
+```bash
+curl -X POST localhost:8000/api/robots/robot-001/cmd -H 'Content-Type: application/json' -d '{"type":"estop"}'
+```
+
+Atlas-1 stops moving within a second and the dashboard shows "This robot is e-stopped." Send
+`{"type":"resume"}` to let it go, or `{"type":"set_goal","x":50,"y":50}` to send it somewhere.
+
+```bash
+docker compose stop robot-agent-003
+```
+
+Hauler-3's card dims with **"OFFLINE - last seen Ns ago"** within a couple of seconds - a real fact about
+that one robot, not the fabricated-data fallback (`demo` stays `false`; the other five robots are
+unaffected). `docker compose start robot-agent-003` brings it back on its own. Stopping `mosquitto`
+itself is the bigger version of the same idea: every robot ages to offline, but the gateway keeps serving
+the real last-known fleet state rather than switching to demo data, because that data is still true -
+merely stale.
+
 ### Stop
 
 ```bash
@@ -214,8 +246,9 @@ cd frontend/dashboard && npm ci && npm run dev      # proxies /api to :8000
 | **Outages are visible** | Fallback payloads carry `"demo": true`; the UI shows a DEMO DATA badge; `/api/health` reports `live` or `mock` per service; `gateway_mock_fallback_total` counts it. A dropped WebSocket keeps streaming demo frames and switches back on its own. |
 | **Observable** | One JSON log line per event with a `request_id` forwarded across services; Prometheus metrics at `/metrics` on every service. |
 | **Efficient rendering** | The point cloud writes into preallocated GPU buffers and moves a draw range, so nothing is reallocated per frame. React state is memoised and chart history commits at 1 Hz. WebSockets reconnect with jittered exponential backoff. |
-| **Tested for real** | 136 pytest + 23 Vitest tests, plus an end-to-end runner and a **real-browser tour** that screenshots every screen and counts changed canvas pixels to prove the point cloud is actually drawn. |
-| **Production-minded infra** | Multi-stage Docker builds from pinned lockfiles, non-root and read-only root filesystems, a private GKE cluster with required `authorized_cidrs`, kustomize image tags (never `:latest`), and a 1 h load-balancer timeout for the WebSocket streams. |
+| **MQTT, chosen for a reason** | Six robots at 10 Hz is ~30 KB/s - not a case for Kafka. MQTT gives per-robot presence (Last Will) and a command channel; point clouds stay off the broker and on the existing WebSocket, because real fleets don't ship raw LiDAR to the cloud either. QoS 0 for the telemetry firehose, QoS 1 for alerts/commands, QoS 2 nowhere (idempotent command ids instead). |
+| **Tested for real** | 207 pytest + 28 Vitest tests, plus an end-to-end runner, **CI-grade k8s validation** (`kubectl kustomize \| kubeconform -strict`), and a **real-browser tour** that screenshots every screen and counts changed canvas pixels to prove the point cloud is actually drawn. |
+| **Production-minded infra** | Multi-stage Docker builds from pinned lockfiles, non-root and read-only root filesystems (verified for the MQTT broker too, uid 1883, no persistence), a private GKE cluster with required `authorized_cidrs`, kustomize image tags (never `:latest`, and never applied to the one third-party image), and a 1 h load-balancer timeout for the WebSocket streams. |
 
 <details>
 <summary><b>Behaviour notes</b></summary>
@@ -239,9 +272,10 @@ scripts/test.sh --browser   # + a real headless-Chrome tour of the dashboard
 ```
 
 The stack checks cover health, status codes, alert stability, Chroma persistence across a restart, three concurrent LiDAR
-viewers at 5 Hz, request-ID propagation, and a chaos step that stops the telemetry service to confirm the dashboard is told it
-is looking at demo data and recovers (`--no-chaos`, `--no-restart`, `--no-load` skip steps). `pre-commit install` runs the
-linters on commit.
+viewers at 5 Hz, request-ID propagation, robot commands, and three chaos steps - stop telemetry (demo-data fallback),
+stop one robot's agent (that robot alone goes offline), stop the broker (the fleet ages to offline but stays real, not
+fabricated) - each confirming its own recovery too (`--no-chaos`, `--no-restart`, `--no-load` skip steps). `pre-commit
+install` runs the linters on commit.
 
 The browser tour lives in `scripts/walkthrough/` and regenerates the screenshots above:
 
@@ -278,29 +312,38 @@ terraform apply -var-file=environments/dev.tfvars -var-file=environments/dev.loc
 
 **Kubernetes.** The API key never goes in git; create the secret by hand (RAG falls back to rule-based answers without it).
 Images use immutable tags injected by kustomize, never `:latest`; applying with the placeholder tag fails loudly with
-`ImagePullBackOff`.
+`ImagePullBackOff`. `mosquitto` is the one third-party image - pinned directly in its own manifest, deliberately outside
+this loop (see the comment in `k8s/kustomization.yaml`).
 
 ```bash
 kubectl apply -f k8s/namespace.yaml
 kubectl -n neurafleet create secret generic neurafleet-secrets --from-literal=ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
 
 cd k8s
-for s in gateway telemetry-service lidar-service rag-service frontend; do
+for s in gateway telemetry-service lidar-service rag-service frontend robot-agent; do
   kustomize edit set image gcr.io/PROJECT_ID/neurafleet-$s=gcr.io/<your-project>/neurafleet-$s:$(git rev-parse --short HEAD)
 done
 kubectl apply -k .
 ```
 
 `k8s/backendconfig.yaml` raises the load balancer timeout to 1 h; without it GCE closes the WebSocket streams after 30 s.
+`k8s/robot-agent/` is six near-identical Deployments (one `ROBOT_ID` each), not a `replicas: 6` Deployment or a
+StatefulSet - the former can't give each replica its own identity, and the latter could (via pod-ordinal naming) but
+would need the agent to derive its id from its own pod name instead of the explicit env var docker-compose already uses.
 </details>
 
 ## Project layout
 
 ```
 backend/{gateway,lidar_service,telemetry_service,rag_service}   one FastAPI service each (+ Dockerfile, lock)
-backend/shared/                                                 API contract + logging/metrics
+backend/robot_agent/                                            one robot per container; MQTT only
+backend/shared/                                                 API contract + physics model + logging/metrics
 frontend/dashboard/                                             React app (Vite, Tailwind, Vitest)
-k8s/   terraform/   docker-compose.yml                          deployment
+mosquitto/                                                      MQTT broker config (docker-compose)
+k8s/{gateway,lidar-service,telemetry-service,rag-service,frontend}  one Deployment + Service each
+k8s/mosquitto/                                                  broker Deployment, Service, ConfigMap
+k8s/robot-agent/                                                six near-identical Deployments (one ROBOT_ID each)
+terraform/   docker-compose.yml                                 GKE cluster + local stack
 tests/   scripts/test.sh   scripts/walkthrough/                 pytest suite, end-to-end runner, browser tour
 assets/screenshots/                                             the images in this README
 ```
