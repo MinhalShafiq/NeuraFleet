@@ -88,3 +88,12 @@ def test_anthropic_call_is_awaited_not_blocking(monkeypatch):
     out, lag = asyncio.run(_max_loop_lag(lambda: client.generate_response("q", ["ctx"])))
     assert out == "from claude"
     assert lag < 0.1
+
+
+def test_rule_based_answer_has_no_raw_heading_underlines():
+    """The source documents underline headings with ----- / =====; those rows leaked into chat answers."""
+    client = llm_mod.LLMClient()
+    context = ["Safety Protocols\n-----------------\nStop the robot.\n\nMore\n=====\nText here."]
+    answer = client._rule_based_response("what are the safety protocols", context, None)
+    assert "---" not in answer and "===" not in answer
+    assert "Stop the robot." in answer

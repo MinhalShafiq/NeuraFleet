@@ -214,9 +214,11 @@ class LLMClient:
         if relevant_snippets:
             base += "\n\nRelevant information from documentation:\n"
             for snippet in relevant_snippets:
-                # Trim to ~200 chars
-                trimmed = snippet[:200].strip()
-                if len(snippet) > 200:
+                # The source files underline their headings ("-----", "====="); drop those rows and
+                # collapse whitespace so the snippet reads as a sentence, then trim to ~200 chars.
+                clean = " ".join(re.sub(r"(?m)^\s*[-=]{3,}\s*$", "", snippet).split())
+                trimmed = clean[:200].strip()
+                if len(clean) > 200:
                     trimmed += "..."
                 base += f"- {trimmed}\n"
 

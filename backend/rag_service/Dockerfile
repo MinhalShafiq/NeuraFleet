@@ -20,8 +20,6 @@ RUN groupadd --gid 1000 appuser && \
 
 WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
-COPY shared/ /app/shared/
-COPY rag_service/ .
 
 # Persistent Chroma directory, owned by the runtime user
 RUN mkdir -p /app/chroma_data && chown appuser:appuser /app/chroma_data
@@ -30,7 +28,13 @@ USER appuser
 
 # Bake Chroma's default embedding model (ONNX MiniLM, ~80 MB) into the image so startup
 # needs no network and the container can run with a read-only root filesystem.
+# This step sits BEFORE the application code is copied: it depends only on the installed
+# packages, so editing code no longer invalidates it and re-downloads the model.
 RUN python -c "from chromadb.utils.embedding_functions import DefaultEmbeddingFunction as E; E()(['warm-up'])"
+
+# Application code last: it changes most often.
+COPY shared/ /app/shared/
+COPY rag_service/ .
 
 EXPOSE 8003
 

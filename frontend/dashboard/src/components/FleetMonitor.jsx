@@ -404,7 +404,13 @@ export default function FleetMonitor({
           icon={AlertTriangle}
           label="Active Alerts"
           value={alerts.length}
-          sub={criticalAlerts > 0 ? `${criticalAlerts} critical` : 'All clear'}
+          sub={
+            criticalAlerts > 0
+              ? `${criticalAlerts} critical`
+              : alerts.length > 0
+                ? `${alerts.length} warning${alerts.length === 1 ? '' : 's'}, none critical`
+                : 'All clear'
+          }
           color={
             criticalAlerts > 0
               ? 'text-red-400'
