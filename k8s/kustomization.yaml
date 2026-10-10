@@ -7,10 +7,14 @@
 #
 # In CI, after pushing images tagged with the git SHA:
 #   cd k8s
-#   for s in gateway telemetry-service lidar-service rag-service frontend; do
+#   for s in gateway telemetry-service lidar-service rag-service frontend robot-agent; do
 #     kustomize edit set image gcr.io/PROJECT_ID/neurafleet-$s=gcr.io/<your-project>/neurafleet-$s:$GIT_SHA
 #   done
 #   kubectl apply -k .
+#
+# eclipse-mosquitto (k8s/mosquitto/) is a third-party image, not one of ours: it is pinned
+# directly in its manifest and deliberately has no entry below - this override list exists
+# only to retarget images this repo builds and pushes itself.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -28,6 +32,15 @@ resources:
   - rag-service/service.yaml
   - frontend/deployment.yaml
   - frontend/service.yaml
+  - mosquitto/configmap.yaml
+  - mosquitto/deployment.yaml
+  - mosquitto/service.yaml
+  - robot-agent/robot-001.yaml
+  - robot-agent/robot-002.yaml
+  - robot-agent/robot-003.yaml
+  - robot-agent/robot-004.yaml
+  - robot-agent/robot-005.yaml
+  - robot-agent/robot-006.yaml
   - ingress.yaml
 
 images:
@@ -40,4 +53,6 @@ images:
   - name: gcr.io/PROJECT_ID/neurafleet-rag-service
     newTag: 0.0.0-unset
   - name: gcr.io/PROJECT_ID/neurafleet-frontend
+    newTag: 0.0.0-unset
+  - name: gcr.io/PROJECT_ID/neurafleet-robot-agent
     newTag: 0.0.0-unset

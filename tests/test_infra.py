@@ -7,12 +7,13 @@ These run without a cluster; they encode the review findings so they cannot regr
 
 import glob
 import json
+import os
 import re
 from pathlib import Path
 
 import pytest
 import yaml
-from conftest import ROOT
+from conftest import ROOT, load_robot_agent_module
 
 
 def _docs(path):
@@ -193,6 +194,46 @@ def test_managed_certificate_covers_every_ingress_host():
         assert {r["host"] for r in i["spec"]["rules"]} <= covered
 
 
+# ---------------------------------------------------------------- robot-agent (plan-messaging.md)
+def test_robot_agent_probe_paths_are_served():
+    """robot-agent isn't in conftest.SERVICE_DIRS (test_manifests.py's generic check assumes
+    one k8s/<service>/deployment.yaml per service; this is six near-identical files - see
+    the header comment in k8s/robot-agent/robot-001.yaml), so it gets its own version here."""
+    os.environ.setdefault("ROBOT_ID", "robot-001")
+    routes = {r.path for r in load_robot_agent_module("main").app.routes}
+    for doc in _docs(ROOT / "k8s" / "robot-agent" / "robot-001.yaml"):
+        for container in doc["spec"]["template"]["spec"]["containers"]:
+            for probe in ("livenessProbe", "readinessProbe"):
+                path = container[probe]["httpGet"]["path"]
+                assert path in routes, f"robot-agent {probe} -> {path} is not a route"
+
+
+def test_all_six_robot_agent_deployments_are_identical_except_their_robot_id():
+    """Six files, one shape: if they drift apart except for ROBOT_ID, that's a bug, not a
+    deliberate per-robot difference (none exists)."""
+    files = sorted((ROOT / "k8s" / "robot-agent").glob("robot-*.yaml"))
+    assert len(files) == 6
+
+    def scrub(node, deployment_name):
+        """Replace every string equal to this file's own deployment name with a constant,
+        wherever it appears (labels, selectors, matchLabels, ...), rather than chasing
+        each nested path by hand."""
+        if isinstance(node, dict):
+            return {k: scrub(v, deployment_name) for k, v in node.items()}
+        if isinstance(node, list):
+            return [scrub(v, deployment_name) for v in node]
+        return "X" if node == deployment_name else node
+
+    normalised = set()
+    for f in files:
+        doc = _docs(f)[0]
+        doc = scrub(doc, doc["metadata"]["name"])
+        env = doc["spec"]["template"]["spec"]["containers"][0]["env"]
+        env[:] = [e for e in env if e["name"] != "ROBOT_ID"]
+        normalised.add(json.dumps(doc, sort_keys=True))
+    assert len(normalised) == 1, "the six robot-agent deployments differ by more than ROBOT_ID"
+
+
 def test_frontend_nginx_is_unprivileged_and_exposes_health():
     conf = (ROOT / "frontend/dashboard/nginx.conf").read_text()
     assert re.search(r"listen\s+8080;", conf) and "location = /healthz" in conf
@@ -231,4 +272,19 @@ def test_kustomization_covers_every_manifest_and_image():
     assert listed == on_disk, f"kustomization out of sync: {listed ^ on_disk}"
     overrides = {i["name"] for i in kz["images"]}
     used = {c["image"].rsplit(":", 1)[0] for _, spec in _pod_specs() for c in spec["containers"]}
-    assert used <= overrides, f"images with no kustomize override: {used - overrides}"
+    # The override list exists to retarget images THIS REPO builds and pushes at deploy
+    # time (see the kustomization.yaml header comment); a third-party image (eclipse-
+    # mosquitto) is pinned directly in its own manifest and must never be touched by it.
+    ours = {img for img in used if img.startswith("gcr.io/PROJECT_ID/")}
+    assert ours <= overrides, f"images with no kustomize override: {ours - overrides}"
+
+
+def test_third_party_images_are_not_in_the_kustomize_override_list():
+    """The inverse of the check above: an override entry for a third-party image would
+    silently retag it to the placeholder (or a git SHA meant for our own images) and
+    break it, since nothing ever builds/pushes gcr.io/PROJECT_ID/eclipse-mosquitto."""
+    kz = yaml.safe_load((ROOT / "k8s" / "kustomization.yaml").read_text())
+    overrides = {i["name"] for i in kz["images"]}
+    used = {c["image"].rsplit(":", 1)[0] for _, spec in _pod_specs() for c in spec["containers"]}
+    third_party = used - {img for img in used if img.startswith("gcr.io/PROJECT_ID/")}
+    assert not (third_party & overrides), third_party & overrides

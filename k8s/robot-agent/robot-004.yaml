@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: robot-agent-004
+  namespace: neurafleet
+  labels:
+    app: robot-agent-004
+    app.kubernetes.io/name: robot-agent-004
+    app.kubernetes.io/part-of: neurafleet
+    app.kubernetes.io/component: robot-agent
+spec:
+  replicas: 1  # one process is this one robot; it has no meaning scaled out
+  selector:
+    matchLabels:
+      app: robot-agent-004
+  template:
+    metadata:
+      labels:
+        app: robot-agent-004
+        app.kubernetes.io/name: robot-agent-004
+        app.kubernetes.io/part-of: neurafleet
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: robot-agent
+          image: gcr.io/PROJECT_ID/neurafleet-robot-agent:0.0.0-unset  # real tag injected by kustomize (see k8s/kustomization.yaml)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8010
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: neurafleet-config
+          env:
+            - name: ROBOT_ID
+              value: "robot-004"  # Sentinel-4 - the only difference between these six files
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "150m"
+              memory: "128Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8010
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8010
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      restartPolicy: Always

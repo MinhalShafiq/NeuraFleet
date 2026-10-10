@@ -1,0 +1,79 @@
+# A third-party image (not built by this repo's pipeline), so it is pinned directly to a
+# real tag here rather than through kustomize's image-override mechanism, which exists
+# for OUR OWN gcr.io/PROJECT_ID/* images (see k8s/kustomization.yaml). Verified to run
+# non-root with a fully read-only root filesystem (uid 1883, the image's own "mosquitto"
+# user; persistence is off and logging goes to stdout, so it never needs to write disk).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mosquitto
+  namespace: neurafleet
+  labels:
+    app: mosquitto
+    app.kubernetes.io/name: mosquitto
+    app.kubernetes.io/part-of: neurafleet
+    app.kubernetes.io/component: messaging
+spec:
+  replicas: 1  # in-memory broker, no clustering configured; >1 replica would split retained state/sessions
+  selector:
+    matchLabels:
+      app: mosquitto
+  template:
+    metadata:
+      labels:
+        app: mosquitto
+        app.kubernetes.io/name: mosquitto
+        app.kubernetes.io/part-of: neurafleet
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1883
+        runAsGroup: 1883
+      containers:
+        - name: mosquitto
+          image: eclipse-mosquitto:2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 1883
+              protocol: TCP
+          livenessProbe:
+            exec:
+              command: ["mosquitto_pub", "-h", "localhost", "-t", "healthcheck", "-m", "ping", "-q", "0", "-i", "healthcheck"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["mosquitto_pub", "-h", "localhost", "-t", "healthcheck", "-m", "ping", "-q", "0", "-i", "healthcheck"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: config
+              mountPath: /mosquitto/config/mosquitto.conf
+              subPath: mosquitto.conf
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: config
+          configMap:
+            name: mosquitto-config
+        - name: tmp
+          emptyDir: {}
+      restartPolicy: Always

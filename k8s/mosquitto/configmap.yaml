@@ -1,0 +1,21 @@
+# Keep this in sync with mosquitto/mosquitto.conf (the docker-compose copy) - kustomize
+# isn't using a configMapGenerator here (nothing else in k8s/ does either), so this is a
+# second copy of a short, rarely-changed file rather than a generated one.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mosquitto-config
+  namespace: neurafleet
+  labels:
+    app: mosquitto
+    app.kubernetes.io/part-of: neurafleet
+data:
+  mosquitto.conf: |
+    listener 1883
+    protocol mqtt
+    persistence false
+    allow_anonymous true
+    log_dest stdout
+    log_type error
+    log_type warning
+    log_type notice

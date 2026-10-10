@@ -1,0 +1,83 @@
+# Six near-identical Deployments, one per robot, rather than a single Deployment with
+# replicas: 6 (vanilla Deployments can't give each replica its own ROBOT_ID) or a
+# StatefulSet (which could, via its pod-ordinal naming, but would need robot_agent to
+# derive ROBOT_ID from its own pod name instead of the explicit env var docker-compose
+# already uses and this repo already tests against - not worth the extra moving part for
+# a fixed set of six). This mirrors docker-compose.yml's `x-robot-agent` anchor exactly:
+# one image, one shape, six ROBOT_ID values.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: robot-agent-001
+  namespace: neurafleet
+  labels:
+    app: robot-agent-001
+    app.kubernetes.io/name: robot-agent-001
+    app.kubernetes.io/part-of: neurafleet
+    app.kubernetes.io/component: robot-agent
+spec:
+  replicas: 1  # one process is this one robot; it has no meaning scaled out
+  selector:
+    matchLabels:
+      app: robot-agent-001
+  template:
+    metadata:
+      labels:
+        app: robot-agent-001
+        app.kubernetes.io/name: robot-agent-001
+        app.kubernetes.io/part-of: neurafleet
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: robot-agent
+          image: gcr.io/PROJECT_ID/neurafleet-robot-agent:0.0.0-unset  # real tag injected by kustomize (see k8s/kustomization.yaml)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8010
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: neurafleet-config
+          env:
+            - name: ROBOT_ID
+              value: "robot-001"  # Atlas-1 - the only difference between these six files
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "150m"
+              memory: "128Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8010
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8010
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      restartPolicy: Always

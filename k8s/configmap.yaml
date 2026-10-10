@@ -16,3 +16,7 @@ data:
   TELEMETRY_SERVICE_URL: "http://telemetry-service:8002"
   RAG_SERVICE_URL: "http://rag-service:8003"
   CHROMA_DATA_DIR: "/app/chroma_data"
+  # MQTT broker (plan-messaging.md): consumed by the gateway (commands), telemetry-service
+  # (the fleet aggregator) and every robot-agent pod.
+  MQTT_HOST: "mosquitto"
+  MQTT_PORT: "1883"
