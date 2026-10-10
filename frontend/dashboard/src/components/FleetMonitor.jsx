@@ -21,6 +21,7 @@ import {
 import clsx from 'clsx'
 import AlertPanel from './AlertPanel'
 import TelemetryPanel from './TelemetryPanel'
+import { timeAgo } from '../services/format'
 
 const STATUS_STYLES = {
   active: 'bg-cyan-400/10 text-cyan-400 border-cyan-400/20',
@@ -71,7 +72,19 @@ function MiniBar({ value, max = 100, color = 'bg-primary-500' }) {
   )
 }
 
+const CONNECTIVITY_STYLES = {
+  stale: 'bg-amber-400/10 text-amber-400 border-amber-400/20',
+  offline: 'bg-red-500/10 text-red-400 border-red-500/20',
+}
+
 const RobotCard = memo(function RobotCard({ robot, isSelected, onSelect }) {
+  // "online" is the common case and carries no badge; a robot whose agent has gone
+  // quiet is flagged honestly instead of silently freezing on its last real values
+  // (plan-messaging.md Phase B) - distinct from the gateway's DEMO DATA badge, which
+  // means fabricated data. This robot's numbers are still real, just not current.
+  const connectivity = robot.connectivity || 'online'
+  const isDisconnected = connectivity !== 'online'
+
   return (
     <div
       onClick={() => onSelect(robot)}
@@ -80,6 +93,7 @@ const RobotCard = memo(function RobotCard({ robot, isSelected, onSelect }) {
         isSelected
           ? 'border-primary-500/40 bg-primary-600/5 ring-1 ring-primary-500/20'
           : 'hover:border-slate-600/50 hover:bg-slate-800/70',
+        isDisconnected && 'opacity-60 saturate-50',
       )}
     >
       {/* Header */}
@@ -88,11 +102,13 @@ const RobotCard = memo(function RobotCard({ robot, isSelected, onSelect }) {
           <Bot
             size={16}
             className={clsx(
-              robot.status === 'active'
-                ? 'text-cyan-400'
-                : robot.status === 'error'
-                  ? 'text-red-400'
-                  : 'text-slate-400',
+              isDisconnected
+                ? 'text-slate-500'
+                : robot.status === 'active'
+                  ? 'text-cyan-400'
+                  : robot.status === 'error'
+                    ? 'text-red-400'
+                    : 'text-slate-400',
             )}
           />
           <div className="min-w-0">
@@ -109,6 +125,24 @@ const RobotCard = memo(function RobotCard({ robot, isSelected, onSelect }) {
           {robot.status}
         </span>
       </div>
+
+      {isDisconnected && (
+        <div
+          className={clsx(
+            'flex items-center gap-1.5 text-[10px] font-medium px-2 py-1 rounded-md border mb-3',
+            CONNECTIVITY_STYLES[connectivity],
+          )}
+        >
+          <span
+            className={clsx(
+              'w-1.5 h-1.5 rounded-full',
+              connectivity === 'offline' ? 'bg-red-400' : 'bg-amber-400',
+            )}
+          />
+          {connectivity === 'offline' ? 'OFFLINE' : 'NOT RESPONDING'} - last seen{' '}
+          {timeAgo(robot.timestamp)}
+        </div>
+      )}
 
       {/* Battery */}
       <div className="mb-3">

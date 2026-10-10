@@ -1,6 +1,7 @@
 import React, { memo, useMemo } from 'react'
 import { AlertTriangle, AlertCircle, Info, CheckCircle, Shield } from 'lucide-react'
 import clsx from 'clsx'
+import { timeAgo } from '../services/format'
 
 const SEVERITY_CONFIG = {
   critical: {
@@ -24,28 +25,6 @@ const SEVERITY_CONFIG = {
     border: 'border-blue-500/20',
     dot: 'bg-blue-500',
   },
-}
-
-function timeAgo(timestamp) {
-  if (!timestamp) return ''
-  const now = Date.now()
-  const ts =
-    typeof timestamp === 'number'
-      ? timestamp > 1e12
-        ? timestamp
-        : timestamp * 1000
-      : new Date(timestamp).getTime()
-  const diff = Math.max(0, now - ts)
-  const seconds = Math.floor(diff / 1000)
-
-  if (seconds < 5) return 'just now'
-  if (seconds < 60) return `${seconds}s ago`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
 }
 
 const AlertItem = memo(function AlertItem({ alert, robotName }) {

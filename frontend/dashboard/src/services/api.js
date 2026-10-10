@@ -52,3 +52,16 @@ export async function fetchLidarScan(robotId) {
   if (!res.ok) throw new Error(`Failed to fetch LiDAR scan for ${robotId}: ${res.status}`)
   return res.json()
 }
+
+// Sends a command and resolves with the CommandAck body even when the robot didn't
+// accept it (offline, bad params): that's a normal answer, not a thrown error. Only a
+// non-2xx (unknown robot, no broker at all, validation failure) throws.
+export async function sendCommand(robotId, command) {
+  const res = await fetch(`${BASE_URL}/api/robots/${robotId}/cmd`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(command),
+  })
+  if (!res.ok) throw new Error(`Command failed for ${robotId}: ${res.status}`)
+  return res.json()
+}

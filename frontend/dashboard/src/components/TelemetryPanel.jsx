@@ -1,4 +1,4 @@
-import React, { memo } from 'react'
+import React, { memo, useState } from 'react'
 import {
   Navigation,
   Gauge,
@@ -8,8 +8,11 @@ import {
   Compass,
   MapPin,
   Zap,
+  Octagon,
+  Play,
 } from 'lucide-react'
 import clsx from 'clsx'
+import { sendCommand } from '../services/api'
 
 function GaugeBar({ label, value, max = 100, unit = '%', icon: Icon, thresholds }) {
   const pct = Math.min(100, Math.max(0, (value / max) * 100))
@@ -74,6 +77,57 @@ function Section({ title, icon: Icon, children }) {
   )
 }
 
+function CommandButtons({ robotId, estopped }) {
+  // Pending/result state is local and transient - this is a quick action, not a form.
+  const [state, setState] = useState({ busy: false, message: null, ok: null })
+
+  const send = async (type) => {
+    setState({ busy: true, message: null, ok: null })
+    try {
+      const ack = await sendCommand(robotId, { type })
+      setState({
+        busy: false,
+        ok: ack.accepted,
+        message: ack.accepted ? null : ack.reason || 'rejected',
+      })
+    } catch (err) {
+      setState({ busy: false, ok: false, message: err.message })
+    }
+  }
+
+  return (
+    <Section title="Commands" icon={Octagon}>
+      <div className="flex gap-2">
+        <button
+          onClick={() => send('estop')}
+          disabled={state.busy}
+          className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 disabled:opacity-50 transition-colors"
+        >
+          <Octagon size={13} /> E-Stop
+        </button>
+        <button
+          onClick={() => send('resume')}
+          disabled={state.busy}
+          className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg bg-green-500/10 text-green-400 border border-green-500/30 hover:bg-green-500/20 disabled:opacity-50 transition-colors"
+        >
+          <Play size={13} /> Resume
+        </button>
+      </div>
+      {state.message && (
+        <p
+          className={clsx(
+            'text-[10px] mt-1.5',
+            state.ok === false ? 'text-amber-400' : 'text-slate-500',
+          )}
+        >
+          {state.ok === false ? `Not applied: ${state.message}` : state.message}
+        </p>
+      )}
+      {estopped && <p className="text-[10px] text-red-400 mt-1.5">This robot is e-stopped.</p>}
+    </Section>
+  )
+}
+
 function TelemetryPanel({ robot }) {
   if (!robot) {
     return (
@@ -94,6 +148,8 @@ function TelemetryPanel({ robot }) {
           LIVE
         </span>
       </div>
+
+      <CommandButtons robotId={robot.robot_id} estopped={robot.estopped} />
 
       {/* Position & Velocity */}
       <Section title="Position" icon={MapPin}>
