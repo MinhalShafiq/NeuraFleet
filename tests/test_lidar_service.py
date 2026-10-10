@@ -158,3 +158,41 @@ def test_unknown_robot_stream_is_refused_and_allocates_nothing(live_server):
     with pytest.raises(websockets.exceptions.InvalidHandshake):
         _connect(live_server, "not-a-robot")
     assert "not-a-robot" not in svc._simulators and "not-a-robot" not in svc.hub._tasks
+
+
+def test_streamed_frames_carry_the_sensor_origin(live_server):
+    """The dashboard centres its camera on this; the stream must include it, not just REST."""
+    with _connect(live_server, "robot-005") as ws:
+        frame = _recv_frames(ws, 1)[0]
+    assert set(frame["origin"]) == {"x", "y", "z"} and "heading" in frame
+    assert 0 <= frame["origin"]["x"] <= 100 and 0 <= frame["origin"]["y"] <= 100
+
+
+def test_robot_turns_away_from_the_boundary_it_hits(monkeypatch):
+    """Clamping position alone left robots pinned to a wall with the heading still pointing into it."""
+    import math
+
+    from lidar_service import main as lidar_main
+
+    monkeypatch.setattr(
+        lidar_main.random, "gauss", lambda *_: 0.0
+    )  # no drift: only the wall matters
+    hi = lidar_main._environment.area_size - 5
+    cases = [  # (start x, y, heading into a wall, which axis of the heading must flip)
+        (5.0, 50.0, math.pi, "x"),  # driving -X into the low-x wall
+        (hi, 50.0, 0.0, "x"),  # driving +X into the high-x wall
+        (50.0, 5.0, -math.pi / 2, "y"),  # driving -Y
+        (50.0, hi, math.pi / 2, "y"),  # driving +Y
+    ]
+    for x0, y0, h0, axis in cases:
+        lidar_main._robot_positions["wall-bot"] = (x0, y0, 0.0)
+        lidar_main._robot_headings["wall-bot"] = h0
+        lidar_main._update_robot_position("wall-bot")
+        x, y, _ = lidar_main._robot_positions["wall-bot"]
+        h = lidar_main._robot_headings["wall-bot"]
+        assert 5 <= x <= hi and 5 <= y <= hi
+        dx, dy = math.cos(h), math.sin(h)
+        if axis == "x":
+            assert dx * (1 if x0 < 50 else -1) > 0, f"still heading into the x wall: {h}"
+        else:
+            assert dy * (1 if y0 < 50 else -1) > 0, f"still heading into the y wall: {h}"

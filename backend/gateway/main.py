@@ -150,6 +150,8 @@ def _mock_lidar_scan(robot_id: str) -> dict:
         "points": points,
         "frame_id": _mock_frame_counter,
         "num_points": num_points,
+        "origin": {"x": 0.0, "y": 0.0, "z": 0.0},  # mock points are already sensor-relative
+        "heading": 0.0,
         "demo": True,
     }
 

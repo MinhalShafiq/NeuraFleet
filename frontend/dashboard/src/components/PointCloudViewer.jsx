@@ -6,26 +6,9 @@ import { Radar, ChevronDown } from 'lucide-react'
 import clsx from 'clsx'
 import { createLidarSocket } from '../services/api'
 import { connectWithBackoff } from '../services/reconnect'
+import { MAX_POINTS, fillPointBuffers } from '../services/pointcloud'
+import { headingToYaw, robotModelParts } from '../services/robotModels'
 import DemoBadge from './DemoBadge'
-
-// GPU buffers are allocated once at this size and reused for every frame
-// (the REST scan tops out at 15,000 points; the stream sends ~2,000).
-const MAX_POINTS = 20000
-
-// Blue -> green -> red ramp for intensity in [0, 1] (the simulator already clamps it).
-// Writes straight into the colour buffer: no per-point array allocation.
-function writeIntensityColor(out, offset, intensity) {
-  const t = intensity < 0 ? 0 : intensity > 1 ? 1 : intensity
-  if (t < 0.5) {
-    out[offset] = 0
-    out[offset + 1] = t * 2
-    out[offset + 2] = 1 - t * 2
-  } else {
-    out[offset] = (t - 0.5) * 2
-    out[offset + 1] = 1 - (t - 0.5) * 2
-    out[offset + 2] = 0
-  }
-}
 
 function PointCloud({ lidarData }) {
   // One geometry, created once.  Frames overwrite its buffers in place and move the
@@ -46,20 +29,13 @@ function PointCloud({ lidarData }) {
 
   // Runs once per received message (~5 Hz), not once per rendered frame (60 Hz).
   useEffect(() => {
-    const pts = lidarData?.points
-    const n = pts ? Math.min(pts.length, MAX_POINTS) : 0
+    const n = fillPointBuffers(
+      lidarData?.points,
+      lidarData?.origin,
+      geometry.attributes.position.array,
+      geometry.attributes.color.array,
+    )
     if (n > 0) {
-      const posArr = geometry.attributes.position.array
-      const colArr = geometry.attributes.color.array
-      for (let i = 0; i < n; i++) {
-        const p = pts[i]
-        const o = i * 3
-        // LiDAR frame is z-up; three.js is y-up.
-        posArr[o] = p[0]
-        posArr[o + 1] = p[2] || 0
-        posArr[o + 2] = p[1]
-        writeIntensityColor(colArr, o, p[3] || 0)
-      }
       geometry.attributes.position.needsUpdate = true
       geometry.attributes.color.needsUpdate = true
     }
@@ -69,8 +45,28 @@ function PointCloud({ lidarData }) {
   return (
     // frustumCulled off: the bounding sphere is computed once and these points move.
     <points geometry={geometry} frustumCulled={false}>
-      <pointsMaterial size={0.05} vertexColors sizeAttenuation={true} transparent opacity={0.9} />
+      <pointsMaterial size={0.12} vertexColors sizeAttenuation={true} transparent opacity={0.95} />
     </points>
+  )
+}
+
+// The robot, drawn at the scan origin (the viewer is centred on the sensor, so that is the scene
+// origin) and turned to the scan's heading.  Built from a handful of primitives; see robotModels.js.
+function RobotModel({ robotType, heading }) {
+  const parts = useMemo(() => robotModelParts(robotType), [robotType])
+  return (
+    <group rotation={[0, headingToYaw(heading), 0]}>
+      {parts.map((p, i) => (
+        <mesh key={i} position={p.position} rotation={p.rotation}>
+          {p.shape === 'box' ? (
+            <boxGeometry args={p.size} />
+          ) : (
+            <cylinderGeometry args={[p.size[0], p.size[0], p.size[1], 16]} />
+          )}
+          <meshStandardMaterial color={p.color} roughness={0.6} metalness={0.2} />
+        </mesh>
+      ))}
+    </group>
   )
 }
 
@@ -78,23 +74,24 @@ function SceneSetup() {
   const { camera } = useThree()
 
   useEffect(() => {
-    camera.position.set(10, 8, 10)
+    camera.position.set(14, 10, 14)
     camera.lookAt(0, 0, 0)
   }, [camera])
 
   return null
 }
 
-function Scene({ lidarData }) {
+function Scene({ lidarData, robotType }) {
   return (
     <>
       <SceneSetup />
-      <ambientLight intensity={0.2} />
-      <directionalLight position={[10, 10, 5]} intensity={0.3} />
+      <ambientLight intensity={0.6} />
+      <directionalLight position={[10, 10, 5]} intensity={1.1} />
 
       <gridHelper args={[50, 50, 0x1a1a2e, 0x1a1a2e]} />
       <axesHelper args={[2]} />
 
+      {lidarData && <RobotModel robotType={robotType} heading={lidarData.heading} />}
       <PointCloud lidarData={lidarData} />
 
       <OrbitControls
@@ -142,6 +139,8 @@ export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }
     return () => connection.close()
   }, [robotId])
 
+  const robotType =
+    selectedRobot?.robot_type || fleet.find((r) => r.robot_id === robotId)?.robot_type
   const robotName =
     selectedRobot?.name || fleet.find((r) => r.robot_id === robotId)?.name || robotId
 
@@ -253,14 +252,14 @@ export default function PointCloudViewer({ fleet, selectedRobot, onSelectRobot }
         ) : null}
 
         <Canvas
-          camera={{ position: [10, 8, 10], fov: 60, near: 0.1, far: 1000 }}
+          camera={{ position: [14, 10, 14], fov: 60, near: 0.1, far: 1000 }}
           gl={{ antialias: true, alpha: false }}
           onCreated={({ gl }) => {
             gl.setClearColor(new THREE.Color(0x0a0a0f))
           }}
           style={{ background: '#0a0a0f' }}
         >
-          <Scene lidarData={lidarData} />
+          <Scene lidarData={lidarData} robotType={robotType} />
           {showStats && <Stats />}
         </Canvas>
 

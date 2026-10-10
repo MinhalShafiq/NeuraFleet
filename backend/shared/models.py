@@ -146,9 +146,18 @@ class LidarScan(BaseModel):
 
     robot_id: str
     timestamp: str
-    points: list[list[float]] = Field(description="List of [x, y, z, intensity] points")
+    points: list[list[float]] = Field(
+        description="List of [x, y, z, intensity] points in the WORLD frame (metres)"
+    )
     frame_id: int
     num_points: int
+    origin: Position | None = Field(
+        default=None,
+        description="Where the robot (sensor base) was in the world frame; the sensor is 1.8 m above. "
+        "Viewers draw points relative to this, otherwise a scan taken 50 m from the origin "
+        "lands 50 m away from a camera looking at the origin.",
+    )
+    heading: float | None = Field(default=None, description="Sensor heading in radians, 0 = +X")
     demo: bool = False
 
 

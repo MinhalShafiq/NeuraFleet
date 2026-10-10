@@ -137,6 +137,7 @@ def test_lidar_scan_endpoint_matches_contract_and_rejects_unknown_robots():
     ok, unknown = asyncio.run(run())
     scan = LidarScan(**ok.json())
     assert scan.num_points == len(scan.points) > 0 and scan.demo is False
+    _assert_scan_is_centred_on_origin(scan)
     assert unknown.status_code == 404
     assert "anything-at-all" not in lidar._simulators, "unknown ids must not allocate a simulator"
 
@@ -237,3 +238,28 @@ def test_telemetry_ws_treats_connection_closed_as_a_normal_disconnect(caplog):
             tel.fleet_sim = None
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR], caplog.text
     assert any("disconnected" in r.getMessage() for r in caplog.records)
+
+
+def _assert_scan_is_centred_on_origin(scan):
+    """Points are in the WORLD frame, so a viewer can only draw them if it knows where the sensor
+    was.  Regression: without ``origin`` the 3D viewer looked at (0,0,0) while the cloud sat 40-90 m
+    away, and showed an empty grid although frames were streaming."""
+    import math
+
+    assert scan.origin is not None, "scan must say where the sensor was"
+    assert 0 <= scan.origin.x <= 100 and 0 <= scan.origin.y <= 100  # inside the arena
+    assert scan.heading is not None
+    reach = max(math.hypot(p[0] - scan.origin.x, p[1] - scan.origin.y) for p in scan.points)
+    assert reach <= 100.5, (
+        f"points reach {reach:.0f} m from the reported origin (max range is 100 m)"
+    )
+
+
+def test_gateway_mock_scan_is_sensor_relative():
+    scan = LidarScan(**gw._mock_lidar_scan("robot-001"))
+    assert (scan.origin.x, scan.origin.y, scan.origin.z) == (0.0, 0.0, 0.0)
+    assert max(math_hypot(p[0], p[1]) for p in scan.points) <= 51
+
+
+def math_hypot(x, y):
+    return (x * x + y * y) ** 0.5

@@ -91,9 +91,16 @@ def _update_robot_position(robot_id: str, dt: float = 0.2) -> None:
     x += speed * math.cos(heading) * dt
     y += speed * math.sin(heading) * dt
 
-    # Clamp to environment boundaries with margin
-    x = max(5, min(_environment.area_size - 5, x))
-    y = max(5, min(_environment.area_size - 5, y))
+    # Keep the robot inside the environment (with a margin) and turn it away from the wall it hit.
+    # Clamping the position alone left the robot pinned to the wall, still "facing" into it, so the
+    # reported heading no longer matched the direction of travel.
+    lo, hi = 5, _environment.area_size - 5
+    if not lo <= x <= hi:
+        x = max(lo, min(hi, x))
+        heading = math.pi - heading  # mirror about the wall's normal (x axis)
+    if not lo <= y <= hi:
+        y = max(lo, min(hi, y))
+        heading = -heading  # mirror about the wall's normal (y axis)
 
     _robot_positions[robot_id] = (x, y, z)
     _robot_headings[robot_id] = heading
@@ -134,16 +141,23 @@ async def _scan_async(robot_id: str, max_stream_points: int = 2000) -> str:
         frame_id = _frame_counters[robot_id]
     # Serialising ~10k points costs tens of ms (FastAPI's jsonable_encoder alone is
     # ~60 ms for a full scan); do it off the loop and hand back ready-made text.
-    return await _cpu(_scan_json, robot_id, raw_points, max_stream_points, frame_id)
+    return await _cpu(_scan_json, robot_id, raw_points, max_stream_points, frame_id, pos, heading)
 
 
-def _scan_json(robot_id: str, points: np.ndarray, max_stream_points: int, frame_id: int) -> str:
+def _scan_json(
+    robot_id: str,
+    points: np.ndarray,
+    max_stream_points: int,
+    frame_id: int,
+    origin: tuple[float, float, float] | None = None,
+    heading: float | None = None,
+) -> str:
     """
     Serialise a scan.  ``json.dumps`` holds the GIL for its whole C call (~30 ms for
     a full scan), so the points are encoded in slices with a ``sleep(0)`` between
     them to let the event-loop thread run.  Output is identical to a single dumps.
     """
-    d = _scan_to_dict(robot_id, points, max_stream_points, frame_id)
+    d = _scan_to_dict(robot_id, points, max_stream_points, frame_id, origin, heading)
     pts = d.pop("points")
     parts = []
     for i in range(0, len(pts), 1000):
@@ -158,6 +172,8 @@ def _scan_to_dict(
     points: np.ndarray,
     max_stream_points: int = 2000,
     frame_id: int | None = None,
+    origin: tuple[float, float, float] | None = None,
+    heading: float | None = None,
 ) -> dict:
     """Convert a numpy scan to a JSON-serialisable dict (downsampled)."""
     n = points.shape[0]
@@ -170,7 +186,7 @@ def _scan_to_dict(
     else:
         pts = points
 
-    return {
+    scan = {
         "robot_id": robot_id,
         "timestamp": datetime.now(UTC).isoformat(),
         # Round in float64: rounding float32 and converting with tolist() yields reprs like
@@ -179,6 +195,16 @@ def _scan_to_dict(
         "frame_id": _frame_counters.get(robot_id, 0) if frame_id is None else frame_id,
         "num_points": int(pts.shape[0]),
     }
+    if origin is not None:
+        # Points are in the world frame; say where the sensor was so viewers can centre on it.
+        scan["origin"] = {
+            "x": round(origin[0], 3),
+            "y": round(origin[1], 3),
+            "z": round(origin[2], 3),
+        }
+    if heading is not None:
+        scan["heading"] = round(heading, 4)
+    return scan
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +315,7 @@ async def process_scan(req: ProcessRequest):
         _frame_counters[req.robot_id] = _frame_counters.get(req.robot_id, 0) + 1
         frame_id = _frame_counters[req.robot_id]
 
-    text = await _cpu(_scan_json, req.robot_id, compensated, 2000, frame_id)
+    text = await _cpu(_scan_json, req.robot_id, compensated, 2000, frame_id, pos, heading)
     return Response(content=text, media_type="application/json")
 
 
