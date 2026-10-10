@@ -2,99 +2,57 @@
 NeuraFleet Fleet Simulator
 ==========================
 
-Simulates a fleet of heterogeneous robots with realistic telemetry:
-positions, velocities, battery levels, CPU/memory usage, temperature,
-IMU and GPS sensor readings, and status transitions.
+Two ways to fill a fleet's state, sharing one physics model (``shared.robot_physics``):
 
-Anomaly detection produces alerts for high temperatures, low batteries,
-sensor malfunctions, communication loss, and collision proximity.
+``FleetSimulator``
+    Ticks all six robots locally, in this process. This is the original design, kept as
+    the "no MQTT needed" mode: tests use it directly, and it is what ``robot_agent``'s
+    single-robot physics is extracted *from* (not a different simulation, the same one).
+
+``FleetAggregator``
+    Fills robot state from MQTT telemetry published by independent ``robot_agent``
+    processes instead of ticking physics locally (see ``plan-messaging.md``). It reuses
+    ``FleetSimulator`` for everything that doesn't care where the numbers came from:
+    anomaly detection, stateful alerts (raise once, update, clear with hysteresis),
+    metrics history, and the public query API. It adds per-robot connectivity
+    (online / stale / offline), because "is this robot's data still arriving" only
+    exists once robots are separate, unreliable publishers rather than one loop's
+    dict reads.
 """
 
 from __future__ import annotations
 
 import math
 import random
-import zlib
+import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
+from shared.robot_physics import (
+    FLEET_CONFIG,
+    RobotConfig,
+    RobotSim,
+    advance_robot,
+    robot_telemetry,
+    stable_phase,
+)
 
-
-@dataclass
-class RobotConfig:
-    robot_id: str
-    name: str
-    robot_type: str
-
-
-FLEET_CONFIG: list[RobotConfig] = [
-    RobotConfig("robot-001", "Atlas-1", "explorer"),
-    RobotConfig("robot-002", "Scout-2", "scout"),
-    RobotConfig("robot-003", "Hauler-3", "hauler"),
-    RobotConfig("robot-004", "Sentinel-4", "sentinel"),
-    RobotConfig("robot-005", "Mapper-5", "mapper"),
-    RobotConfig("robot-006", "Relay-6", "relay"),
+__all__ = [
+    "RobotConfig",
+    "RobotSim",
+    "FLEET_CONFIG",
+    "FleetSimulator",
+    "FleetAggregator",
 ]
 
-
-@dataclass
-class RobotSim:
-    """Mutable simulation state for one robot."""
-
-    robot_id: str
-    name: str
-    robot_type: str
-
-    # Kinematics
-    x: float = 0.0
-    y: float = 0.0
-    z: float = 0.0
-    vx: float = 0.0
-    vy: float = 0.0
-    vz: float = 0.0
-    heading: float = 0.0  # radians
-
-    # Systems
-    battery: float = 90.0
-    status: str = "active"
-    cpu_usage: float = 35.0
-    memory_usage: float = 45.0
-    temperature: float = 50.0
-
-    # Sensors
-    imu_ax: float = 0.0
-    imu_ay: float = 0.0
-    imu_az: float = -9.81
-    imu_gx: float = 0.0
-    imu_gy: float = 0.0
-    imu_gz: float = 0.0
-    gps_lat: float = 37.7749
-    gps_lon: float = -122.4194
-    gps_alt: float = 10.0
-
-    # Internal timers
-    _status_timer: float = 0.0
-    _anomaly_cooldown: float = 0.0
-    _charging_target: float = 95.0
-    _sensor_fault: bool = False
-
-    # Charging station position (each robot has one assigned)
-    _charge_x: float = 50.0
-    _charge_y: float = 50.0
+# Re-exported for anything importing the old private name (docs snippets, tests).
+_stable_phase = stable_phase
 
 
 # ---------------------------------------------------------------------------
 # Fleet Simulator
 # ---------------------------------------------------------------------------
-
-
-def _stable_phase(robot_id: str) -> int:
-    """Process-independent replacement for ``hash(str)`` (PYTHONHASHSEED-safe)."""
-    return zlib.crc32(robot_id.encode()) % 100
 
 
 class FleetSimulator:
@@ -154,238 +112,23 @@ class FleetSimulator:
         self._sim_time += dt
 
         for r in self.robots.values():
-            self._update_status(r, dt)
-            self._update_kinematics(r, dt)
-            self._update_battery(r, dt)
-            self._update_systems(r, dt)
-            self._update_sensors(r, dt)
-            self._maybe_inject_anomaly(r, dt)
-
-            # Record metric snapshot (capped at 100 per robot)
-            vel_mag = math.sqrt(r.vx**2 + r.vy**2 + r.vz**2)
-            self._metrics_history[r.robot_id].append(
-                {
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "battery": round(r.battery, 2),
-                    "cpu_usage": round(r.cpu_usage, 2),
-                    "memory_usage": round(r.memory_usage, 2),
-                    "temperature": round(r.temperature, 2),
-                    "velocity_magnitude": round(vel_mag, 3),
-                }
-            )
-
+            advance_robot(r, dt, self._rng, self.area_size, self._sim_time)
+            self._record_metrics(r)
             # Anomaly detection -> alert state transitions
             self._sync_alerts(r, self._detect_anomalies(r))
 
-    # ------------------------------------------------------------------
-    # Status FSM
-    # ------------------------------------------------------------------
-
-    def _update_status(self, r: RobotSim, dt: float) -> None:
-        r._status_timer -= dt
-
-        if r.status == "charging":
-            if r.battery >= r._charging_target:
-                r.status = "active"
-                r._status_timer = self._rng.uniform(20, 60)
-            return
-
-        if r.status == "error":
-            if r._status_timer <= 0:
-                r.status = "maintenance"
-                r._status_timer = self._rng.uniform(5, 15)
-            return
-
-        if r.status == "maintenance":
-            if r._status_timer <= 0:
-                r.status = "active"
-                r._status_timer = self._rng.uniform(30, 90)
-                r._sensor_fault = False
-            return
-
-        if r.status == "idle":
-            if r._status_timer <= 0:
-                r.status = "active"
-                r._status_timer = self._rng.uniform(20, 60)
-            return
-
-        # Status is "active"
-        if r.battery < 15:
-            r.status = "charging"
-            r._charging_target = self._rng.uniform(85, 98)
-            return
-
-        if r._status_timer <= 0:
-            # Random state transition
-            roll = self._rng.random()
-            if roll < 0.02:
-                r.status = "error"
-                r._status_timer = self._rng.uniform(5, 20)
-            elif roll < 0.07:
-                r.status = "idle"
-                r._status_timer = self._rng.uniform(5, 15)
-            else:
-                r._status_timer = self._rng.uniform(10, 40)
-
-    # ------------------------------------------------------------------
-    # Kinematics
-    # ------------------------------------------------------------------
-
-    def _update_kinematics(self, r: RobotSim, dt: float) -> None:
-        if r.status in ("charging", "idle", "maintenance"):
-            # Slow to a halt
-            r.vx *= 0.9
-            r.vy *= 0.9
-            if r.status == "charging":
-                # Drift toward charging station
-                dx = r._charge_x - r.x
-                dy = r._charge_y - r.y
-                dist = math.sqrt(dx * dx + dy * dy)
-                if dist > 1.0:
-                    r.vx += 0.5 * dx / dist * dt
-                    r.vy += 0.5 * dy / dist * dt
-        elif r.status == "error":
-            r.vx *= 0.95
-            r.vy *= 0.95
-        else:
-            # Active: random walk with momentum
-            r.heading += self._rng.gauss(0, 0.3 * dt)
-            target_speed = {
-                "explorer": 2.0,
-                "hauler": 1.2,
-                "scout": 2.5,
-                "sentinel": 0.8,
-                "mapper": 1.5,
-                "relay": 0.5,
-            }.get(r.robot_type, 1.5)
-            r.vx += (target_speed * math.cos(r.heading) - r.vx) * 0.1
-            r.vy += (target_speed * math.sin(r.heading) - r.vy) * 0.1
-            # Slight vertical bobbing
-            r.vz = 0.05 * math.sin(self._sim_time * 2 + _stable_phase(r.robot_id))
-
-        r.x += r.vx * dt
-        r.y += r.vy * dt
-        r.z += r.vz * dt
-
-        # Boundary clamping
-        margin = 2.0
-        if r.x < margin:
-            r.x = margin
-            r.vx = abs(r.vx)
-        elif r.x > self.area_size - margin:
-            r.x = self.area_size - margin
-            r.vx = -abs(r.vx)
-        if r.y < margin:
-            r.y = margin
-            r.vy = abs(r.vy)
-        elif r.y > self.area_size - margin:
-            r.y = self.area_size - margin
-            r.vy = -abs(r.vy)
-
-        r.z = max(0, min(r.z, 0.5))
-
-    # ------------------------------------------------------------------
-    # Battery
-    # ------------------------------------------------------------------
-
-    def _update_battery(self, r: RobotSim, dt: float) -> None:
-        if r.status == "charging":
-            r.battery = min(100, r.battery + 0.15 * dt)  # ~9%/min
-        elif r.status == "active":
-            drain = 0.01 * dt  # ~0.6%/min
-            # Haulers drain faster
-            if r.robot_type == "hauler":
-                drain *= 1.5
-            r.battery = max(0, r.battery - drain)
-        elif r.status in ("idle", "maintenance"):
-            r.battery = max(0, r.battery - 0.002 * dt)
-
-    # ------------------------------------------------------------------
-    # CPU / Memory / Temperature
-    # ------------------------------------------------------------------
-
-    def _update_systems(self, r: RobotSim, dt: float) -> None:
-        if r.status == "active":
-            target_cpu = 40 + 20 * abs(math.sin(self._sim_time * 0.1 + _stable_phase(r.robot_id)))
-            target_mem = 45 + 15 * abs(math.cos(self._sim_time * 0.08 + _stable_phase(r.robot_id)))
-            target_temp = 50 + 10 * abs(math.sin(self._sim_time * 0.05 + _stable_phase(r.robot_id)))
-        elif r.status == "idle":
-            target_cpu = 10 + 5 * self._rng.random()
-            target_mem = 30 + 5 * self._rng.random()
-            target_temp = 35 + 3 * self._rng.random()
-        elif r.status == "charging":
-            target_cpu = 8
-            target_mem = 25
-            target_temp = 38
-        elif r.status == "error":
-            target_cpu = 80 + 15 * self._rng.random()
-            target_mem = 70 + 20 * self._rng.random()
-            target_temp = 65 + 10 * self._rng.random()
-        else:  # maintenance
-            target_cpu = 20
-            target_mem = 35
-            target_temp = 40
-
-        alpha = 0.05  # smoothing
-        r.cpu_usage += alpha * (target_cpu - r.cpu_usage) + self._rng.gauss(0, 0.5)
-        r.memory_usage += alpha * (target_mem - r.memory_usage) + self._rng.gauss(0, 0.3)
-        r.temperature += alpha * (target_temp - r.temperature) + self._rng.gauss(0, 0.2)
-
-        r.cpu_usage = max(0, min(100, r.cpu_usage))
-        r.memory_usage = max(0, min(100, r.memory_usage))
-        r.temperature = max(15, min(110, r.temperature))
-
-    # ------------------------------------------------------------------
-    # Sensors (IMU / GPS)
-    # ------------------------------------------------------------------
-
-    def _update_sensors(self, r: RobotSim, dt: float) -> None:
-        if r._sensor_fault:
-            # Produce obviously bad readings
-            r.imu_ax = self._rng.gauss(5, 3)
-            r.imu_ay = self._rng.gauss(5, 3)
-            r.imu_az = self._rng.gauss(-5, 5)
-            r.imu_gx = self._rng.gauss(0, 2)
-            r.imu_gy = self._rng.gauss(0, 2)
-            r.imu_gz = self._rng.gauss(0, 2)
-        else:
-            # Accelerometer (gravity + motion noise)
-            r.imu_ax = r.vx * 0.1 + self._rng.gauss(0, 0.08)
-            r.imu_ay = r.vy * 0.1 + self._rng.gauss(0, 0.08)
-            r.imu_az = -9.81 + self._rng.gauss(0, 0.04)
-            # Gyroscope
-            r.imu_gx = self._rng.gauss(0, 0.01)
-            r.imu_gy = self._rng.gauss(0, 0.01)
-            heading_rate = r.vy * math.cos(r.heading) - r.vx * math.sin(r.heading)
-            r.imu_gz = heading_rate * 0.05 + self._rng.gauss(0, 0.005)
-
-        # GPS (map sim coords to lat/lon)
-        r.gps_lat = 37.7749 + (r.x - 50) * 0.00001 + self._rng.gauss(0, 0.000002)
-        r.gps_lon = -122.4194 + (r.y - 50) * 0.00001 + self._rng.gauss(0, 0.000002)
-        r.gps_alt = 10.0 + r.z + self._rng.gauss(0, 0.3)
-
-    # ------------------------------------------------------------------
-    # Anomaly injection
-    # ------------------------------------------------------------------
-
-    def _maybe_inject_anomaly(self, r: RobotSim, dt: float) -> None:
-        r._anomaly_cooldown = max(0, r._anomaly_cooldown - dt)
-        if r._anomaly_cooldown > 0:
-            return
-
-        roll = self._rng.random()
-        if roll < 0.0005:  # ~0.05% chance per tick
-            # Temperature spike
-            r.temperature = self._rng.uniform(78, 95)
-            r._anomaly_cooldown = self._rng.uniform(20, 60)
-        elif roll < 0.001:
-            # Sensor fault
-            r._sensor_fault = True
-            r._anomaly_cooldown = self._rng.uniform(15, 40)
-        elif roll < 0.0015:
-            # Sudden battery drop
-            r.battery = max(0, r.battery - self._rng.uniform(5, 15))
-            r._anomaly_cooldown = self._rng.uniform(30, 60)
+    def _record_metrics(self, r: RobotSim) -> None:
+        vel_mag = math.sqrt(r.vx**2 + r.vy**2 + r.vz**2)
+        self._metrics_history[r.robot_id].append(
+            {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "battery": round(r.battery, 2),
+                "cpu_usage": round(r.cpu_usage, 2),
+                "memory_usage": round(r.memory_usage, 2),
+                "temperature": round(r.temperature, 2),
+                "velocity_magnitude": round(vel_mag, 3),
+            }
+        )
 
     # ------------------------------------------------------------------
     # Anomaly detection -> alerts
@@ -512,36 +255,151 @@ class FleetSimulator:
 
     @staticmethod
     def _robot_telemetry(r: RobotSim) -> dict:
-        return {
-            "robot_id": r.robot_id,
-            "timestamp": datetime.now(UTC).isoformat(),
-            "position": {"x": round(r.x, 4), "y": round(r.y, 4), "z": round(r.z, 4)},
-            "velocity": {"vx": round(r.vx, 4), "vy": round(r.vy, 4), "vz": round(r.vz, 4)},
-            "battery": round(r.battery, 2),
-            "status": r.status,
-            "cpu_usage": round(r.cpu_usage, 2),
-            "memory_usage": round(r.memory_usage, 2),
-            "temperature": round(r.temperature, 2),
-            "sensors": {
-                "imu": {
-                    "ax": round(r.imu_ax, 4),
-                    "ay": round(r.imu_ay, 4),
-                    "az": round(r.imu_az, 4),
-                    "gx": round(r.imu_gx, 4),
-                    "gy": round(r.imu_gy, 4),
-                    "gz": round(r.imu_gz, 4),
-                },
-                "gps": {
-                    "lat": round(r.gps_lat, 7),
-                    "lon": round(r.gps_lon, 7),
-                    "alt": round(r.gps_alt, 2),
-                },
-            },
-        }
+        return robot_telemetry(r, datetime.now(UTC).isoformat())
 
     @staticmethod
     def _robot_state(r: RobotSim) -> dict:
         d = FleetSimulator._robot_telemetry(r)
         d["name"] = r.name
         d["robot_type"] = r.robot_type
+        return d
+
+
+# ---------------------------------------------------------------------------
+# Fleet Aggregator - fills robot state from MQTT instead of local ticks
+# ---------------------------------------------------------------------------
+
+# How long without a telemetry message before a robot is considered stale, then
+# offline, in the absence of an explicit status message (its birth/LWT message).
+# 10 Hz telemetry means 3 s is ~30 missed messages: generous enough that normal
+# jitter never flaps, fast enough that a demo notices within a few seconds.
+STALE_AFTER_SECONDS = 3.0
+OFFLINE_AFTER_SECONDS = 10.0
+
+
+@dataclass
+class _ConnState:
+    state: str = "online"  # online | stale | offline
+    last_seen: float = 0.0  # time.monotonic() of the last telemetry message
+    explicit_offline: bool = False  # a status/LWT message said so - timers don't override it
+
+
+class FleetAggregator(FleetSimulator):
+    """A ``FleetSimulator`` whose robots are filled from MQTT messages rather than a
+    local physics tick. ``update()`` still works (useful in tests, and harmless if
+    something calls it), it just races whatever the MQTT bridge is also writing.
+    """
+
+    def __init__(
+        self, configs: list[RobotConfig] | None = None, area_size: float = 100.0, seed: int = 12345
+    ):
+        super().__init__(configs, area_size, seed)
+        now = time.monotonic()
+        # Optimistic at startup: a robot is "online" until proven otherwise, so a fresh
+        # aggregator (before any agent has even had time to connect) reports healthy
+        # rather than instantly degraded. check_staleness() ages this out if nothing
+        # ever arrives.
+        self._conn: dict[str, _ConnState] = {
+            rid: _ConnState(state="online", last_seen=now) for rid in self.robots
+        }
+
+    # ------------------------------------------------------------------
+    # Ingest (called by the MQTT bridge)
+    # ------------------------------------------------------------------
+
+    def ingest_telemetry(self, robot_id: str, data: dict) -> None:
+        """Apply one telemetry message (the same shape ``robot_agent`` publishes,
+        i.e. ``shared.robot_physics.robot_telemetry``'s output) to robot *robot_id*."""
+        r = self.robots.get(robot_id)
+        if r is None:
+            return  # an agent publishing under an id we don't know about; ignore it
+        pos, vel, sensors = data["position"], data["velocity"], data["sensors"]
+        r.x, r.y, r.z = pos["x"], pos["y"], pos["z"]
+        r.vx, r.vy, r.vz = vel["vx"], vel["vy"], vel["vz"]
+        r.battery = data["battery"]
+        r.status = data["status"]
+        r.cpu_usage = data["cpu_usage"]
+        r.memory_usage = data["memory_usage"]
+        r.temperature = data["temperature"]
+        r.estopped = data.get(
+            "estopped", False
+        )  # .get(): tolerate an older agent publishing without it
+        imu, gps = sensors["imu"], sensors["gps"]
+        r.imu_ax, r.imu_ay, r.imu_az = imu["ax"], imu["ay"], imu["az"]
+        r.imu_gx, r.imu_gy, r.imu_gz = imu["gx"], imu["gy"], imu["gz"]
+        r.gps_lat, r.gps_lon, r.gps_alt = gps["lat"], gps["lon"], gps["alt"]
+
+        conn = self._conn[robot_id]
+        conn.last_seen = time.monotonic()
+        conn.state = "online"
+        conn.explicit_offline = False
+
+        self._record_metrics(r)
+        self._sync_alerts(r, self._detect_anomalies(r))
+
+    def mark_status(self, robot_id: str, online: bool) -> None:
+        """Apply a ``neurafleet/{id}/status`` message (the birth message, or the
+        broker publishing the robot's Last Will after it disappeared)."""
+        conn = self._conn.get(robot_id)
+        if conn is None:
+            return
+        if online:
+            conn.state = "online"
+            conn.last_seen = time.monotonic()
+            conn.explicit_offline = False
+        else:
+            conn.state = "offline"
+            conn.explicit_offline = True
+
+    def check_staleness(self) -> None:
+        """Age connectivity forward and re-run alert detection for everyone.
+
+        This runs on its own timer (not just when a message arrives) for two
+        reasons: a robot that stops publishing must still be *noticed* even
+        though nothing triggers a check for it, and a condition like
+        "collision proximity" depends on a robot that didn't just report
+        (its neighbour moved, it didn't).
+        """
+        now = time.monotonic()
+        for conn in self._conn.values():
+            if conn.explicit_offline:
+                continue  # a status message is authoritative until the next one
+            age = now - conn.last_seen
+            if age > OFFLINE_AFTER_SECONDS:
+                conn.state = "offline"
+            elif age > STALE_AFTER_SECONDS:
+                conn.state = "stale"
+        for r in self.robots.values():
+            self._sync_alerts(r, self._detect_anomalies(r))
+
+    def connectivity_counts(self) -> dict[str, int]:
+        counts = {"online": 0, "stale": 0, "offline": 0}
+        for conn in self._conn.values():
+            counts[conn.state] += 1
+        return counts
+
+    def connectivity(self, robot_id: str) -> str:
+        conn = self._conn.get(robot_id)
+        return conn.state if conn else "offline"
+
+    # ------------------------------------------------------------------
+    # Query overrides: merge in connectivity (additive field, see shared.models)
+    # ------------------------------------------------------------------
+
+    def get_telemetry(self) -> list[dict]:
+        out = super().get_telemetry()
+        for d in out:
+            d["connectivity"] = self.connectivity(d["robot_id"])
+        return out
+
+    def get_all_robots(self) -> list[dict]:
+        out = super().get_all_robots()
+        for d in out:
+            d["connectivity"] = self.connectivity(d["robot_id"])
+        return out
+
+    def get_robot(self, robot_id: str) -> dict | None:
+        d = super().get_robot(robot_id)
+        if d is not None:
+            d["connectivity"] = self.connectivity(robot_id)
         return d

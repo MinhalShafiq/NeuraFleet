@@ -1,4 +1,108 @@
+# Six robot-agent containers differ only by ROBOT_ID: one image, one anchor, so adding a
+# seventh robot is a three-line block, not a copy-pasted service with its own Dockerfile.
+# See plan-messaging.md Phase A for why robots are independent processes rather than one
+# in-process loop (what telemetry-service used to be).
+x-robot-agent: &robot-agent
+  image: neurafleet-robot-agent  # one built image, not six: matches the k8s manifests, which
+  # deploy the same gcr.io/PROJECT_ID/neurafleet-robot-agent to all six Deployments
+  build:
+    context: ./backend
+    dockerfile: robot_agent/Dockerfile
+  depends_on:
+    mosquitto:
+      condition: service_healthy
+  networks:
+    - neurafleet-net
+  restart: unless-stopped
+  # No ports published: only the broker and the other containers on neurafleet-net
+  # ever need to reach an agent, and each one's HEALTHCHECK runs inside its own
+  # container regardless. `environment` is set per-robot below (ROBOT_ID differs);
+  # a merge key can't partially override a list, so it isn't worth anchoring here.
+
 services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: neurafleet-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD", "mosquitto_pub", "-h", "localhost", "-t", "healthcheck", "-m", "ping", "-q", "0", "-i", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks:
+      - neurafleet-net
+    restart: unless-stopped
+
+  robot-agent-001:
+    <<: *robot-agent
+    container_name: neurafleet-robot-001
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - ROBOT_ID=robot-001
+
+  robot-agent-002:
+    <<: *robot-agent
+    container_name: neurafleet-robot-002
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - ROBOT_ID=robot-002
+
+  robot-agent-003:
+    <<: *robot-agent
+    container_name: neurafleet-robot-003
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - ROBOT_ID=robot-003
+
+  robot-agent-004:
+    <<: *robot-agent
+    container_name: neurafleet-robot-004
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - ROBOT_ID=robot-004
+
+  robot-agent-005:
+    <<: *robot-agent
+    container_name: neurafleet-robot-005
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - ROBOT_ID=robot-005
+
+  robot-agent-006:
+    <<: *robot-agent
+    container_name: neurafleet-robot-006
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - ROBOT_ID=robot-006
+
   gateway:
     build:
       context: ./backend
@@ -14,6 +118,8 @@ services:
       - TELEMETRY_SERVICE_URL=http://telemetry-service:8002
       - RAG_SERVICE_URL=http://rag-service:8003
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
     depends_on:
       lidar-service:
         condition: service_started
@@ -21,6 +127,8 @@ services:
         condition: service_started
       rag-service:
         condition: service_started
+      mosquitto:
+        condition: service_healthy
     networks:
       - neurafleet-net
     restart: unless-stopped
@@ -51,6 +159,11 @@ services:
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - LOG_FORMAT=${LOG_FORMAT:-json}
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+    depends_on:
+      mosquitto:
+        condition: service_healthy
     networks:
       - neurafleet-net
     restart: unless-stopped

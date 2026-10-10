@@ -31,10 +31,12 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.exceptions import ResponseValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from mqtt_commands import CommandBus, CommandBusUnavailable, CommandTimeout
 from websockets.exceptions import ConnectionClosed
 
 from shared.models import (
     Alert,
+    CommandAck,
     ErrorDetail,
     GatewayHealth,
     LidarScan,
@@ -42,6 +44,7 @@ from shared.models import (
     MetricsHistory,
     RAGQuery,
     RAGResponse,
+    RobotCommand,
     RobotState,
 )
 from shared.observability import REQUEST_ID_HEADER, install_observability, request_id_var
@@ -269,18 +272,27 @@ async def _proxy_post(base_url: str, path: str, body: dict) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
+command_bus: CommandBus | None = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global command_bus
     logger.info("NeuraFleet API Gateway starting up")
     logger.info("  Telemetry service: %s", settings.telemetry_service_url)
     logger.info("  LiDAR service:     %s", settings.lidar_service_url)
     logger.info("  RAG service:       %s", settings.rag_service_url)
     logger.info("  CORS origins:      %s", ", ".join(settings.cors_origins))
+    logger.info("  MQTT broker:       %s:%s", settings.mqtt_host, settings.mqtt_port)
+    command_bus = CommandBus(settings.mqtt_host, settings.mqtt_port)
+    command_bus.start()
     yield
     # Shutdown
     global _http_client
     if _http_client and not _http_client.is_closed:
         await _http_client.aclose()
+    if command_bus:
+        await command_bus.stop()
     logger.info("NeuraFleet API Gateway shut down")
 
 
@@ -368,6 +380,7 @@ async def health():
         _probe("rag", settings.rag_service_url),
     )
     services = dict(results)
+    services["mqtt"] = "healthy" if (command_bus and command_bus.connected) else "unreachable"
     mode = {name: ("live" if state == "healthy" else "mock") for name, state in services.items()}
     return {"status": "ok", "services": services, "mode": mode}
 
@@ -396,6 +409,43 @@ async def get_robot(robot_id: str):
         if rid == robot_id:
             return _fallback("/api/fleet/{robot_id}", _mock_robot(rid, name, rtype))
     raise HTTPException(status_code=404, detail=f"robot {robot_id} not found")
+
+
+@app.post(
+    "/api/robots/{robot_id}/cmd",
+    response_model=CommandAck,
+    responses={**_NOT_FOUND, 503: {"model": ErrorDetail}},
+)
+async def send_command(robot_id: str, body: RobotCommand):
+    """
+    Publish a command to a robot over MQTT and wait for its ack (plan-messaging.md Phase C).
+
+    This is the one write path in the API, and the three outcomes are deliberately
+    distinct: an unknown robot id is a client error (404); the gateway having no broker
+    connection at all is an infrastructure failure (503); but a *known* robot simply not
+    answering - its agent is down, or offline - is not an error at all, it is the normal
+    and expected shape of a distributed system, so it comes back as a completed,
+    unaccepted ``CommandAck`` (HTTP 200) rather than a 5xx.
+    """
+    if not any(robot_id == rid for rid, _, _ in _ROBOT_NAMES):
+        raise HTTPException(status_code=404, detail=f"robot {robot_id} not found")
+    if command_bus is None:
+        raise HTTPException(status_code=503, detail="command bus not started")
+
+    command = {k: v for k, v in body.model_dump().items() if v is not None}
+    try:
+        return await command_bus.send(robot_id, command, timeout=settings.mqtt_command_timeout)
+    except CommandBusUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except CommandTimeout:
+        return {
+            "command_id": "",
+            "robot_id": robot_id,
+            "accepted": False,
+            "reason": f"no response from {robot_id} within "
+            f"{settings.mqtt_command_timeout:.1f}s (its agent may be offline)",
+            "timestamp": _ts(),
+        }
 
 
 @app.get("/api/alerts", response_model=list[Alert])

@@ -24,6 +24,11 @@ class Settings:
     telemetry_service_url: str = os.getenv("TELEMETRY_SERVICE_URL", "http://telemetry-service:8002")
     rag_service_url: str = os.getenv("RAG_SERVICE_URL", "http://rag-service:8003")
 
+    # MQTT broker for the robot command path (plan-messaging.md Phase C)
+    mqtt_host: str = os.getenv("MQTT_HOST", "mosquitto")
+    mqtt_port: int = int(os.getenv("MQTT_PORT", "1883"))
+    mqtt_command_timeout: float = float(os.getenv("MQTT_COMMAND_TIMEOUT", "2.0"))
+
     # Gateway settings
     host: str = os.getenv("GATEWAY_HOST", "0.0.0.0")
     port: int = int(os.getenv("GATEWAY_PORT", "8000"))

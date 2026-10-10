@@ -45,6 +45,21 @@ class AlertSeverity(str, Enum):
     critical = "critical"
 
 
+class Connectivity(str, Enum):
+    """Whether a robot's data is actually arriving right now (plan-messaging.md Phase B).
+
+    Distinct from ``demo``: ``demo`` means the *gateway* fabricated this payload because
+    telemetry-service was unreachable. ``connectivity`` means telemetry-service itself is
+    fine but hasn't heard from this *particular* robot's agent recently - a real fact
+    about that robot, not a fallback. A robot can be ``stale``/``offline`` in perfectly
+    live (non-demo) data.
+    """
+
+    online = "online"
+    stale = "stale"
+    offline = "offline"
+
+
 class AlertType(str, Enum):
     high_temperature = "high_temperature"
     low_battery = "low_battery"
@@ -111,6 +126,11 @@ class TelemetryData(BaseModel):
     temperature: float = Field(description="Degrees Celsius")
     sensors: SensorData
     demo: bool = Field(default=False, description="True if fabricated by the gateway fallback")
+    connectivity: Connectivity = Field(
+        default=Connectivity.online,
+        description="Whether this robot's own data is currently arriving (see Connectivity)",
+    )
+    estopped: bool = Field(default=False, description="True if an estop command is in effect")
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +154,11 @@ class RobotState(BaseModel):
     temperature: float
     sensors: SensorData
     demo: bool = Field(default=False, description="True if fabricated by the gateway fallback")
+    connectivity: Connectivity = Field(
+        default=Connectivity.online,
+        description="Whether this robot's own data is currently arriving (see Connectivity)",
+    )
+    estopped: bool = Field(default=False, description="True if an estop command is in effect")
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +205,42 @@ class Alert(BaseModel):
     count: int = Field(default=1, description="Number of ticks the condition has been observed")
     resolved_at: str | None = Field(default=None, description="Set once the condition cleared")
     demo: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Commands (plan-messaging.md Phase C: the first cloud -> robot write path)
+# ---------------------------------------------------------------------------
+
+
+class CommandType(str, Enum):
+    set_goal = "set_goal"
+    estop = "estop"
+    resume = "resume"
+    set_speed_limit = "set_speed_limit"
+
+
+class RobotCommand(BaseModel):
+    """Published to ``neurafleet/{robot_id}/cmd`` (QoS 1). ``command_id`` is set by the
+    gateway, not the caller, so retries/duplicates on the wire are safe to apply twice -
+    the agent deduplicates by this id."""
+
+    type: CommandType
+    x: float | None = Field(default=None, description="set_goal target X, metres")
+    y: float | None = Field(default=None, description="set_goal target Y, metres")
+    speed_limit: float | None = Field(
+        default=None, ge=0, description="set_speed_limit cap, m/s (0 = hold position)"
+    )
+
+
+class CommandAck(BaseModel):
+    """Published to ``neurafleet/{robot_id}/cmd/ack`` by the agent, and returned by the
+    gateway's ``POST /api/robots/{robot_id}/cmd`` to the caller."""
+
+    command_id: str
+    robot_id: str
+    accepted: bool
+    reason: str | None = Field(default=None, description="Why it was rejected, if it was")
+    timestamp: str
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +316,12 @@ class TelemetryHealth(BaseModel):
     status: str
     robots: int = 0
     alerts: int = 0
+    mqtt: str = Field(
+        default="connected", description="connected | disconnected: the broker link itself"
+    )
+    robots_online: int = 0
+    robots_stale: int = 0
+    robots_offline: int = 0
 
 
 class LidarHealth(BaseModel):

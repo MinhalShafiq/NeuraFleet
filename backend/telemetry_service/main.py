@@ -2,9 +2,11 @@
 NeuraFleet Telemetry Service
 =============================
 
-FastAPI microservice that runs a fleet simulation, streams telemetry
-over WebSocket at ~2 Hz, and exposes REST endpoints for robot states,
-alerts, and metrics history.
+FastAPI microservice that aggregates a fleet of robots over MQTT (plan-messaging.md
+Phase A) and serves REST + WebSocket endpoints for robot states, alerts, and metrics
+history. The robots themselves are simulated independently by ``robot_agent``; this
+service's job is to subscribe, detect anomalies, raise stateful alerts, and answer
+queries - it does not move anything itself any more.
 """
 
 from __future__ import annotations
@@ -13,11 +15,13 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from robot_simulator import FleetSimulator
+from mqtt_bridge import MqttBridge
+from robot_simulator import FleetAggregator
 from websockets.exceptions import ConnectionClosed
 
 from shared.models import Alert, ErrorDetail, MetricsHistory, RobotState, TelemetryHealth
@@ -25,26 +29,34 @@ from shared.observability import install_observability
 
 logger = logging.getLogger("telemetry_service")
 
+MQTT_HOST = os.getenv("MQTT_HOST", "mosquitto")
+MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
+# How often to age connectivity forward and re-check fleet-wide alerts (e.g. collision
+# proximity, which depends on robots that didn't just report). Independent of the 10 Hz
+# telemetry rate - this is the "is anyone still talking to us at all" heartbeat.
+STALENESS_CHECK_INTERVAL = 1.0
+
 # ---------------------------------------------------------------------------
-# Simulation instance
+# Aggregator + MQTT bridge
 # ---------------------------------------------------------------------------
 
-fleet_sim: FleetSimulator | None = None
-_sim_task: asyncio.Task | None = None
+fleet_sim: FleetAggregator | None = None
+mqtt_bridge: MqttBridge | None = None
+_mqtt_task: asyncio.Task | None = None
+_staleness_task: asyncio.Task | None = None
 
 
-async def _simulation_loop() -> None:
-    """Background coroutine that ticks the simulation at 10 Hz."""
+async def _staleness_loop() -> None:
+    """Ages robots online -> stale -> offline when their telemetry stops arriving, and
+    re-runs alert detection for the whole fleet on a fixed cadence (not just when a
+    specific robot's message arrives - see FleetAggregator.check_staleness)."""
     assert fleet_sim is not None
-    dt = 0.1  # 10 Hz
-    logger.info("Simulation loop started (dt=%.2f s)", dt)
     while True:
         try:
-            with tick_seconds.time():
-                fleet_sim.update(dt)
+            fleet_sim.check_staleness()
         except Exception:
-            logger.exception("Simulation tick error")
-        await asyncio.sleep(dt)
+            logger.exception("Staleness check error")
+        await asyncio.sleep(STALENESS_CHECK_INTERVAL)
 
 
 # ---------------------------------------------------------------------------
@@ -54,16 +66,19 @@ async def _simulation_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global fleet_sim, _sim_task
-    fleet_sim = FleetSimulator()
-    logger.info("Fleet simulator initialised with %d robots", len(fleet_sim.robots))
-    _sim_task = asyncio.create_task(_simulation_loop())
+    global fleet_sim, mqtt_bridge, _mqtt_task, _staleness_task
+    fleet_sim = FleetAggregator()
+    logger.info("Fleet aggregator initialised for %d robots", len(fleet_sim.robots))
+    mqtt_bridge = MqttBridge(fleet_sim, MQTT_HOST, MQTT_PORT)
+    _mqtt_task = asyncio.create_task(mqtt_bridge.run())
+    _staleness_task = asyncio.create_task(_staleness_loop())
     yield
     # Shutdown
-    if _sim_task:
-        _sim_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await _sim_task
+    for task in (_mqtt_task, _staleness_task):
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
     logger.info("Telemetry Service shut down")
 
 
@@ -77,13 +92,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 obs = install_observability(app, "telemetry")
-tick_seconds = obs.histogram(
-    "telemetry_sim_tick_seconds",
-    "Time to advance the fleet simulation one tick",
-    (0.001, 0.005, 0.01, 0.025, 0.05, 0.1),
-)
 active_alerts = obs.gauge("telemetry_active_alerts", "Alerts currently raised")
 active_alerts.set_function(lambda: len(fleet_sim.get_alerts()) if fleet_sim else 0)
+robots_online = obs.gauge("telemetry_robots_online", "Robots whose telemetry is currently arriving")
+robots_online.set_function(lambda: fleet_sim.connectivity_counts()["online"] if fleet_sim else 0)
+mqtt_connected = obs.gauge("telemetry_mqtt_connected", "1 if the MQTT broker link is up")
+mqtt_connected.set_function(lambda: int(bool(mqtt_bridge and mqtt_bridge.connected)))
 
 _NOT_FOUND: dict[int | str, dict[str, Any]] = {
     404: {"model": ErrorDetail},
@@ -93,12 +107,25 @@ _NOT_FOUND: dict[int | str, dict[str, Any]] = {
 
 @app.get("/health", response_model=TelemetryHealth)
 async def health():
+    """Liveness/observability. Always HTTP 200 (this is the k8s probe target, and a
+    restart would not fix an MQTT outage) - ``status`` in the body says "degraded"
+    instead when no robot's telemetry is currently arriving, for direct observability
+    (``curl .../health``, dashboards). This deliberately does NOT drive the gateway's
+    DEMO DATA badge: robots being offline is real, honest data (see each robot's own
+    ``connectivity`` field and shared.models.Connectivity), not fabricated data, so it
+    must not look the same as telemetry-service being unreachable."""
     if fleet_sim is None:
         return {"status": "starting"}
+    counts = fleet_sim.connectivity_counts()
+    degraded = counts["online"] == 0
     return {
-        "status": "ok",
+        "status": "degraded" if degraded else "ok",
         "robots": len(fleet_sim.robots),
         "alerts": len(fleet_sim.get_alerts()),
+        "mqtt": "connected" if (mqtt_bridge and mqtt_bridge.connected) else "disconnected",
+        "robots_online": counts["online"],
+        "robots_stale": counts["stale"],
+        "robots_offline": counts["offline"],
     }
 
 
