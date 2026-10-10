@@ -88,17 +88,18 @@ HEALTH=$(curl -s --max-time 10 localhost:8000/api/health 2>/dev/null)
 if [ -z "$HEALTH" ]; then skip "stack checks" "stack is not running - start it with: scripts/test.sh --up"; summary; fi
 
 check "gateway /health (k8s probe path)  [0.1]" 200 "$(code localhost:8000/health)"
-check "/api/health: all 3 services healthy and LIVE (no mock fallback)" \
-  '{"status":"ok","services":{"telemetry":"healthy","lidar":"healthy","rag":"healthy"},"mode":{"telemetry":"live","lidar":"live","rag":"live"}}' "$HEALTH"
+check "/api/health: all services healthy and LIVE (no mock fallback)" \
+  '{"status":"ok","services":{"telemetry":"healthy","lidar":"healthy","rag":"healthy","mqtt":"healthy"},"mode":{"telemetry":"live","lidar":"live","rag":"live","mqtt":"live"}}' "$HEALTH"
 # HEALTHCHECK needs its start-period + one interval before reporting healthy: poll, don't sample once.
+ALL_CONTAINERS="neurafleet-gateway neurafleet-telemetry neurafleet-lidar neurafleet-rag neurafleet-frontend neurafleet-mosquitto neurafleet-robot-001 neurafleet-robot-002 neurafleet-robot-003 neurafleet-robot-004 neurafleet-robot-005 neurafleet-robot-006"
 UNHEALTHY=
 for i in $(seq 1 45); do
-  UNHEALTHY=$(for c in neurafleet-gateway neurafleet-telemetry neurafleet-lidar neurafleet-rag neurafleet-frontend; do
+  UNHEALTHY=$(for c in $ALL_CONTAINERS; do
     st=$(docker inspect -f '{{.State.Health.Status}}' $c 2>/dev/null || sg docker -c "docker inspect -f '{{.State.Health.Status}}' $c" 2>/dev/null)
     [ "$st" = healthy ] || echo "$c=$st"; done)
   [ -z "$UNHEALTHY" ] && break; sleep 2
 done
-[ -z "$UNHEALTHY" ] && pass "all 5 containers report HEALTHCHECK healthy" || fail "container healthchecks" "$UNHEALTHY"
+[ -z "$UNHEALTHY" ] && pass "all 12 containers report HEALTHCHECK healthy" || fail "container healthchecks" "$UNHEALTHY"
 
 section "Observability  [4.5]"
 RID=$(curl -s -D - -o /dev/null -H 'X-Request-ID: test-trace-1' localhost:8000/health | tr -d '\r' | awk -F': ' 'tolower($1)=="x-request-id"{print $2}')
@@ -118,7 +119,7 @@ check "frontend serves on :3000" 200 "$(code localhost:3000/)"
 section "Single worker / replica  [0.2]"
 # Count only the current container run (earlier runs of this script restart services on purpose).
 since() { docker inspect -f '{{.State.StartedAt}}' "$1" 2>/dev/null || sg docker -c "docker inspect -f '{{.State.StartedAt}}' $1"; }
-check "telemetry simulation loop started once" 1 "$(dc logs --since "$(since neurafleet-telemetry)" telemetry-service | grep -c 'Simulation loop started')"
+check "telemetry aggregator initialised once" 1 "$(dc logs --since "$(since neurafleet-telemetry)" telemetry-service | grep -c 'Fleet aggregator initialised')"
 check "lidar server processes started" 1 "$(dc logs --since "$(since neurafleet-lidar)" lidar-service | grep -c 'Started server process')"
 
 section "Stateful alerts  [0.5]"
@@ -209,10 +210,83 @@ PYEOF
   check "WebSocket telemetry is live again" True "$WSLIVE"
 else skip "demo-data fallback" "--no-chaos"; fi
 
+section "MQTT presence: one robot offline, the rest unaffected  [plan-messaging.md Phase B]"
+if [ $CHAOS -eq 1 ]; then
+  dc stop robot-agent-003 >/dev/null
+  OFFLINE=no; for i in $(seq 1 15); do
+    C=$(curl -s localhost:8000/api/fleet/robot-003 | "$PY" -c "import sys,json;print(json.load(sys.stdin)['connectivity'])" 2>/dev/null)
+    [ "$C" = offline ] && { OFFLINE=yes; break; }; sleep 1; done
+  check "robot-003 shows offline within 10s of its agent stopping" yes "$OFFLINE"
+  OTHERS_OK=$(curl -s localhost:8000/api/fleet | "$PY" -c "
+import sys, json
+d = json.load(sys.stdin)
+others = [r for r in d if r['robot_id'] != 'robot-003']
+print(all(r['connectivity'] == 'online' for r in others) and not any(r['demo'] for r in d))
+")
+  check "the other five robots stay online and not flagged demo" True "$OTHERS_OK"
+  check "gateway /api/health stays fully live (one offline robot is not a service outage)" live \
+    "$(curl -s localhost:8000/api/health | "$PY" -c "import sys,json;print(json.load(sys.stdin)['mode']['telemetry'])")"
+  dc start robot-agent-003 >/dev/null
+  BACK=no; for i in $(seq 1 15); do
+    C=$(curl -s localhost:8000/api/fleet/robot-003 | "$PY" -c "import sys,json;print(json.load(sys.stdin)['connectivity'])" 2>/dev/null)
+    [ "$C" = online ] && { BACK=yes; break; }; sleep 1; done
+  check "robot-003 is back online after its agent restarts" yes "$BACK"
+else skip "MQTT presence" "--no-chaos"; fi
+
+section "MQTT broker outage: stale data stays real, not fabricated  [plan-messaging.md Phase D]"
+if [ $CHAOS -eq 1 ]; then
+  dc stop mosquitto >/dev/null
+  ALL_OFFLINE=no; for i in $(seq 1 20); do
+    C=$(curl -s localhost:8002/health | "$PY" -c "import sys,json;print(json.load(sys.stdin)['robots_offline'])" 2>/dev/null)
+    [ "$C" = 6 ] && { ALL_OFFLINE=yes; break; }; sleep 1; done
+  check "every robot ages to offline once the broker is gone" yes "$ALL_OFFLINE"
+  check "telemetry-service's own /health says degraded" degraded \
+    "$(curl -s localhost:8002/health | "$PY" -c "import sys,json;print(json.load(sys.stdin)['status'])")"
+  STILL_LIVE=$(curl -s localhost:8000/api/fleet | "$PY" -c "
+import sys, json
+d = json.load(sys.stdin)
+print(not any(r['demo'] for r in d) and all(r['connectivity'] == 'offline' for r in d))
+")
+  check "gateway keeps serving the real last-known fleet, not fabricated demo data" True "$STILL_LIVE"
+  check "gateway's own mqtt command link is reported unreachable" unreachable \
+    "$(curl -s localhost:8000/api/health | "$PY" -c "import sys,json;print(json.load(sys.stdin)['services']['mqtt'])")"
+  check "a command sent while the broker is down is a 503, not a hang" 503 \
+    "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/api/robots/robot-001/cmd -H 'Content-Type: application/json' -d '{"type":"estop"}')"
+  dc start mosquitto >/dev/null
+  RECONNECTED=no; for i in $(seq 1 20); do
+    curl -sf --max-time 2 localhost:8002/health 2>/dev/null | grep -q '"mqtt":"connected"' && { RECONNECTED=yes; break; }; sleep 2; done
+  check "telemetry-service reconnects to the broker on its own" yes "$RECONNECTED"
+  ALL_BACK=no; for i in $(seq 1 20); do
+    curl -sf --max-time 2 localhost:8002/health 2>/dev/null | grep -q '"robots_online":6' && { ALL_BACK=yes; break; }; sleep 2; done
+  check "every robot is back online within a few seconds" yes "$ALL_BACK"
+else skip "MQTT broker outage" "--no-chaos"; fi
+
+section "Robot commands  [plan-messaging.md Phase C]"
+if [ $LOAD -eq 1 ]; then
+  check "unknown robot -> 404, not a hang or 500" 404 \
+    "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/api/robots/robot-999/cmd -H 'Content-Type: application/json' -d '{"type":"estop"}')"
+  check "invalid command type -> 422" 422 \
+    "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/api/robots/robot-001/cmd -H 'Content-Type: application/json' -d '{"type":"fly"}')"
+  ESTOP=$(curl -s -X POST localhost:8000/api/robots/robot-001/cmd -H 'Content-Type: application/json' -d '{"type":"estop"}')
+  check "estop is accepted" True "$(echo "$ESTOP" | "$PY" -c "import sys,json;print(json.load(sys.stdin)['accepted'])")"
+  sleep 1.5
+  SLOWED=$(curl -s localhost:8000/api/fleet/robot-001 | "$PY" -c "
+import sys, json, math
+v = json.load(sys.stdin)['velocity']
+print(math.hypot(v['vx'], v['vy']) < 0.3)
+")
+  check "the robot actually stops moving after estop" True "$SLOWED"
+  curl -s -X POST localhost:8000/api/robots/robot-001/cmd -H 'Content-Type: application/json' -d '{"type":"resume"}' >/dev/null
+else skip "robot commands" "--no-load"; fi
+
 section "No unhandled errors in service logs"
-for svc in gateway telemetry lidar; do
-  full=$(case $svc in gateway) echo neurafleet-gateway;; telemetry) echo neurafleet-telemetry;; lidar) echo neurafleet-lidar;; esac)
-  name=$(case $svc in gateway) echo gateway;; telemetry) echo telemetry-service;; lidar) echo lidar-service;; esac)
+for svc in gateway telemetry lidar robot-agent-001 robot-agent-002 robot-agent-003 robot-agent-004 robot-agent-005 robot-agent-006; do
+  case $svc in
+    gateway) full=neurafleet-gateway; name=gateway ;;
+    telemetry) full=neurafleet-telemetry; name=telemetry-service ;;
+    lidar) full=neurafleet-lidar; name=lidar-service ;;
+    *) full=neurafleet-robot-${svc#robot-agent-}; name=$svc ;;
+  esac
   ERRS=$(dc logs --since "$(since $full)" $name | grep -c '"level": "ERROR"')
   [ "$ERRS" = 0 ] && pass "$svc: no ERROR-level log lines since it started" || fail "$svc logged $ERRS ERROR line(s)" "docker compose logs $name | grep '\"ERROR\"'"
 done

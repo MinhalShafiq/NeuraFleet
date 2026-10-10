@@ -6,7 +6,7 @@ from collections import defaultdict
 import pytest
 from conftest import BACKEND
 
-SERVICES = ["gateway", "lidar_service", "telemetry_service", "rag_service"]
+SERVICES = ["gateway", "lidar_service", "telemetry_service", "rag_service", "robot_agent"]
 
 
 def _pins(path):

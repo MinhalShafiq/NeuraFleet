@@ -10,9 +10,12 @@ from pydantic import ValidationError
 
 from shared.models import (
     Alert,
+    CommandAck,
+    Connectivity,
     LidarScan,
     MetricsHistory,
     RAGResponse,
+    RobotCommand,
     RobotState,
     TelemetryData,
 )
@@ -99,7 +102,7 @@ def test_mock_positions_are_stable_across_processes():
 
 # --------------------------------------------------------------- HTTP responses
 def test_telemetry_endpoints_return_contract_shapes_and_404s():
-    tel.fleet_sim = sim_mod.FleetSimulator(seed=1)
+    tel.fleet_sim = sim_mod.FleetAggregator(seed=1)
     for _ in range(50):
         tel.fleet_sim.update(0.1)
 
@@ -230,7 +233,7 @@ def test_telemetry_ws_treats_connection_closed_as_a_normal_disconnect(caplog):
             if self.sent > 1:
                 raise ConnectionClosedOK(None, None)
 
-    tel.fleet_sim = sim_mod.FleetSimulator(seed=1)
+    tel.fleet_sim = sim_mod.FleetAggregator(seed=1)
     with caplog.at_level(logging.INFO, logger="telemetry_service"):
         try:
             asyncio.run(asyncio.wait_for(tel.ws_telemetry(Socket()), 5))
@@ -263,3 +266,61 @@ def test_gateway_mock_scan_is_sensor_relative():
 
 def math_hypot(x, y):
     return (x * x + y * y) ** 0.5
+
+
+# ----------------------------------------------------- connectivity (plan-messaging.md Phase B)
+
+
+def test_robot_state_defaults_to_online_connectivity_when_omitted():
+    """Old (or gateway-mocked) payloads never mention connectivity at all; they must
+    still validate, and read as "online" rather than failing closed as "offline"."""
+    good = sim_mod.FleetSimulator(seed=1).get_all_robots()[0]
+    assert "connectivity" not in good
+    assert RobotState(**good).connectivity == Connectivity.online
+
+
+def test_robot_state_accepts_every_connectivity_value():
+    base = sim_mod.FleetSimulator(seed=1).get_all_robots()[0]
+    for value in ("online", "stale", "offline"):
+        assert RobotState(**{**base, "connectivity": value}).connectivity == value
+
+
+def test_robot_state_rejects_an_unknown_connectivity_value():
+    base = sim_mod.FleetSimulator(seed=1).get_all_robots()[0]
+    with pytest.raises(ValidationError):
+        RobotState(**{**base, "connectivity": "lost"})
+
+
+def test_aggregator_output_round_trips_through_the_contract_with_connectivity():
+    agg = sim_mod.FleetAggregator(seed=1)
+    agg.mark_status("robot-001", online=False)
+    for r in agg.get_all_robots():
+        state = RobotState(**r)
+        expected = "offline" if r["robot_id"] == "robot-001" else "online"
+        assert state.connectivity == expected
+
+
+# ----------------------------------------------------- commands (plan-messaging.md Phase C)
+
+
+def test_robot_command_requires_a_known_type():
+    RobotCommand(type="estop")
+    with pytest.raises(ValidationError):
+        RobotCommand(type="fly")
+
+
+def test_robot_command_set_speed_limit_rejects_negative():
+    RobotCommand(type="set_speed_limit", speed_limit=0.5)
+    with pytest.raises(ValidationError):
+        RobotCommand(type="set_speed_limit", speed_limit=-1)
+
+
+def test_command_ack_round_trips():
+    ack = CommandAck(
+        command_id="abc",
+        robot_id="robot-001",
+        accepted=False,
+        reason="offline",
+        timestamp="2026-01-01T00:00:00+00:00",
+    )
+    assert CommandAck(**ack.model_dump()) == ack
