@@ -9,6 +9,7 @@ import pytest
 import websockets
 from conftest import load_module
 from fastapi import WebSocketDisconnect
+from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from shared.observability import request_id_var
 
@@ -48,15 +49,22 @@ def test_cors_is_never_wildcard_with_credentials():
 
 # ------------------------------------------------------------- WebSocket fallback
 class FakeBrowser:
-    """Records frames; behaves like a closed socket after ``limit`` of them."""
+    """Records frames; behaves like a closed socket after ``limit`` of them.
 
-    def __init__(self, limit):
+    ``gone`` is the exception a departed browser produces.  Starlette raises
+    WebSocketDisconnect, but uvicorn's websockets transport lets
+    ``ConnectionClosedOK`` escape from send() - the one that
+    actually happens in production (and used to escape the relay as a 500).
+    """
+
+    def __init__(self, limit, gone=WebSocketDisconnect):
         self.limit = limit
+        self.gone = gone
         self.frames = []
 
     async def send_text(self, text):
         if len(self.frames) >= self.limit:
-            raise WebSocketDisconnect()
+            raise self.gone() if self.gone is WebSocketDisconnect else self.gone(None, None)
         self.frames.append(json.loads(text))
 
 
@@ -159,3 +167,51 @@ def test_fallback_is_counted_per_stream(fast_retry):
     asyncio.run(run())
     sample = gw.mock_fallbacks.labels("ws:counted")._value.get()
     assert sample >= 1
+
+
+@pytest.mark.parametrize(
+    "gone",
+    [
+        WebSocketDisconnect,
+        RuntimeError,
+        ConnectionClosedOK,
+        ConnectionClosedError,
+    ],
+)
+def test_every_kind_of_departed_browser_ends_the_relay_quietly(fast_retry, gone):
+    """Regression: ConnectionClosedOK from send() used to escape as 'Exception in ASGI
+    application' (an ERROR traceback and a 500 in the access log) whenever a viewer left."""
+
+    class Gone(FakeBrowser):
+        async def send_text(self, text):
+            if len(self.frames) >= self.limit:
+                if gone is RuntimeError:
+                    raise RuntimeError("Cannot call send once a close message has been sent.")
+                if gone is WebSocketDisconnect:
+                    raise WebSocketDisconnect()
+                raise gone(None, None)
+            self.frames.append(json.loads(text))
+
+    async def run(mode):
+        if mode == "live":
+
+            async def steady(ws):
+                while True:
+                    await ws.send(json.dumps({"live": 1}))
+                    await asyncio.sleep(0.01)
+
+            server, url = await _serve(steady)
+        else:  # upstream down: the mock stream is what is being sent
+            server, url = await _serve(lambda ws: None)
+            server.close()
+            await server.wait_closed()
+        try:
+            await asyncio.wait_for(
+                gw._relay_with_fallback(Gone(3), url, lambda: {"demo": True}, 0.01, "test"), 5
+            )
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(run("live"))
+    asyncio.run(run("mock"))

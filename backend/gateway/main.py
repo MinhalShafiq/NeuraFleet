@@ -31,6 +31,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.exceptions import ResponseValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from websockets.exceptions import ConnectionClosed
 
 from shared.models import (
     Alert,
@@ -453,7 +454,10 @@ class _ClientGone(Exception):
 async def _send_to_client(ws: WebSocket, text: str) -> None:
     try:
         await ws.send_text(text)
-    except (WebSocketDisconnect, RuntimeError) as exc:
+    # Which exception a departed browser produces depends on the layer: Starlette raises
+    # WebSocketDisconnect/RuntimeError, but uvicorn's websockets transport lets
+    # ConnectionClosed (e.g. ConnectionClosedOK, code 1000) escape from send().
+    except (WebSocketDisconnect, RuntimeError, ConnectionClosed) as exc:
         raise _ClientGone from exc
 
 

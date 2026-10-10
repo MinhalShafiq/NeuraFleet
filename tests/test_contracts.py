@@ -209,3 +209,31 @@ def test_openapi_documents_typed_responses(app, path, model):
     schema = app.openapi()["paths"][path]
     op = schema.get("get") or schema["post"]
     assert model in str(op["responses"]["200"]), f"{path} does not document {model}"
+
+
+def test_telemetry_ws_treats_connection_closed_as_a_normal_disconnect(caplog):
+    """Regression: a viewer leaving surfaces from uvicorn's transport as ConnectionClosedOK,
+    which used to be logged as 'Telemetry WS error' at ERROR level."""
+    import logging
+
+    from websockets.exceptions import ConnectionClosedOK
+
+    class Socket:
+        sent = 0
+
+        async def accept(self):
+            pass
+
+        async def send_text(self, text):
+            self.sent += 1
+            if self.sent > 1:
+                raise ConnectionClosedOK(None, None)
+
+    tel.fleet_sim = sim_mod.FleetSimulator(seed=1)
+    with caplog.at_level(logging.INFO, logger="telemetry_service"):
+        try:
+            asyncio.run(asyncio.wait_for(tel.ws_telemetry(Socket()), 5))
+        finally:
+            tel.fleet_sim = None
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR], caplog.text
+    assert any("disconnected" in r.getMessage() for r in caplog.records)

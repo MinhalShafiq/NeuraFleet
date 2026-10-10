@@ -208,4 +208,12 @@ PYEOF
   check "WebSocket telemetry is live again" True "$WSLIVE"
 else skip "demo-data fallback" "--no-chaos"; fi
 
+section "No unhandled errors in service logs"
+for svc in gateway telemetry lidar; do
+  full=$(case $svc in gateway) echo neurafleet-gateway;; telemetry) echo neurafleet-telemetry;; lidar) echo neurafleet-lidar;; esac)
+  name=$(case $svc in gateway) echo gateway;; telemetry) echo telemetry-service;; lidar) echo lidar-service;; esac)
+  ERRS=$(dc logs --since "$(since $full)" $name | grep -c '"level": "ERROR"')
+  [ "$ERRS" = 0 ] && pass "$svc: no ERROR-level log lines since it started" || fail "$svc logged $ERRS ERROR line(s)" "docker compose logs $name | grep '\"ERROR\"'"
+done
+
 summary

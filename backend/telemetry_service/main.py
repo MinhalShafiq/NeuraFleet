@@ -18,6 +18,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from robot_simulator import FleetSimulator
+from websockets.exceptions import ConnectionClosed
 
 from shared.models import Alert, ErrorDetail, MetricsHistory, RobotState, TelemetryHealth
 from shared.observability import install_observability
@@ -178,7 +179,9 @@ async def ws_telemetry(ws: WebSocket):
                 payload = json.dumps(fleet_sim.get_telemetry())
                 await ws.send_text(payload)
             await asyncio.sleep(0.5)  # 2 Hz
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, ConnectionClosed):
+        # A viewer leaving is normal; uvicorn's websockets transport reports it as
+        # ConnectionClosed(OK) from send(), not as Starlette's WebSocketDisconnect.
         logger.info("Telemetry WS client disconnected")
     except Exception as exc:
         logger.error("Telemetry WS error: %s", exc)
