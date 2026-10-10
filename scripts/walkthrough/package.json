@@ -1,0 +1,8 @@
+{
+  "name": "neurafleet-walkthrough",
+  "private": true,
+  "type": "module",
+  "description": "Drives the dashboard in a real headless browser and screenshots every screen",
+  "scripts": { "walk": "node walk.mjs all" },
+  "dependencies": { "playwright-core": "^1.49.0", "pngjs": "^7.0.0" }
+}

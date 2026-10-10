@@ -6,16 +6,17 @@
 #   scripts/test.sh --unit       pytest + ruff + mypy only (fast, no Docker/Node needed)
 #   scripts/test.sh --no-restart skip restarting rag-service (persistence check)
 #   scripts/test.sh --no-chaos   skip stopping telemetry-service (demo-data fallback + recovery check)
+#   scripts/test.sh --browser    also drive the dashboard in a real headless Chrome (scripts/walkthrough; needs `npm install` there)
 #   scripts/test.sh --no-load    skip the 3-viewer streaming load test
 #
 # Exit code is non-zero if any check fails.
 set -u
 cd "$(dirname "$0")/.."
 
-UP=0 UNIT_ONLY=0 RESTART=1 LOAD=1 CHAOS=1
+UP=0 UNIT_ONLY=0 RESTART=1 LOAD=1 CHAOS=1 BROWSER_TEST=0
 for a in "$@"; do
   case "$a" in
-    --up) UP=1 ;; --unit) UNIT_ONLY=1 ;; --no-restart) RESTART=0 ;; --no-load) LOAD=0 ;; --no-chaos) CHAOS=0 ;;
+    --up) UP=1 ;; --unit) UNIT_ONLY=1 ;; --no-restart) RESTART=0 ;; --no-load) LOAD=0 ;; --no-chaos) CHAOS=0 ;; --browser) BROWSER_TEST=1 ;;
     -h|--help) sed -n '2,10p' "$0"; exit 0 ;;
     *) echo "unknown option: $a"; exit 2 ;;
   esac
@@ -215,5 +216,14 @@ for svc in gateway telemetry lidar; do
   ERRS=$(dc logs --since "$(since $full)" $name | grep -c '"level": "ERROR"')
   [ "$ERRS" = 0 ] && pass "$svc: no ERROR-level log lines since it started" || fail "$svc logged $ERRS ERROR line(s)" "docker compose logs $name | grep '\"ERROR\"'"
 done
+
+section "Real browser (headless Chrome)"
+if [ $BROWSER_TEST -eq 1 ]; then
+  if [ -d scripts/walkthrough/node_modules ]; then
+    if OUT=$(cd scripts/walkthrough && node walk.mjs main 2>&1); then pass "dashboard, LiDAR viewer and chat work in a browser"
+    else fail "browser walkthrough" "$(echo "$OUT" | grep -E 'FAIL|HTTP|console|pageerror' | head -4 | tr '\n' ' ')"; fi
+    echo "$OUT" | grep -E "PASS|FAIL" | sed 's/^ */       /'
+  else skip "browser walkthrough" "run: cd scripts/walkthrough && npm install"; fi
+else skip "browser walkthrough" "add --browser"; fi
 
 summary
